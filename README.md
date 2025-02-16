@@ -49,4 +49,5 @@ I risultati includono:
 
 ## Supporto
 Per segnalazioni o richieste di aiuto, aprire un'issue su GitHub o contattare l'autore.
+![app](https://github.com/user-attachments/assets/bef0549c-a856-4525-989f-20b65e257b32)
 

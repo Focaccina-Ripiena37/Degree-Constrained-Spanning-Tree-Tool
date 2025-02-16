@@ -302,30 +302,47 @@ def draw_and_save_graph(G, filename):
 
 # Funzione greedy per costruire lo spanning tree
 def greedy_degree_constrained_spanning_tree(G, root, k):
+    # Inizializza un grafo diretto per rappresentare lo spanning tree
     tree = nx.DiGraph()
     tree.add_node(root)
+    
+    # Dizionario per contare i figli di ciascun nodo
     children_count = {node: 0 for node in G.nodes()}
+    
+    # Insieme dei nodi già inclusi nello spanning tree
     nodes_in_tree = {root}
+    
+    # Continua finché tutti i nodi non sono inclusi nello spanning tree
     while len(nodes_in_tree) < len(G.nodes()):
         candidate_edge = None
         candidate_weight = float('inf')
+        
+        # Cerca il miglior candidato per l'aggiunta allo spanning tree
         for u in nodes_in_tree:
+            # Salta i nodi che hanno già raggiunto il limite di figli
             if children_count[u] >= k:
                 continue
             for v in G.neighbors(u):
+                # Salta i nodi già inclusi nello spanning tree
                 if v in nodes_in_tree:
                     continue
                 w = G[u][v].get('weight', 1)
+                # Aggiorna il candidato se trova un peso minore
                 if w < candidate_weight:
                     candidate_weight = w
                     candidate_edge = (u, v)
+        
+        # Se non ci sono candidati validi, non è possibile costruire uno spanning tree valido
         if candidate_edge is None:
             print("Non è possibile costruire uno spanning tree che rispetti il vincolo di grado.")
             return None
+        
+        # Aggiungi l'arco candidato allo spanning tree
         u, v = candidate_edge
         tree.add_edge(u, v, weight=candidate_weight)
         nodes_in_tree.add(v)
         children_count[u] += 1
+    
     return tree
 
 # Funzione per calcolare il costo totale dello spanning tree
@@ -342,32 +359,46 @@ def is_degree_valid(T, root, k):
 
 # Ricerca locale per migliorare lo spanning tree
 def local_search_spanning_tree(G, initial_tree, root, k, max_iterations=100):
-    current_tree = initial_tree.copy()
-    current_cost = compute_tree_cost(current_tree)
+    current_tree = initial_tree.copy()  # Copia l'albero iniziale
+    current_cost = compute_tree_cost(current_tree)  # Calcola il costo dell'albero corrente
     iteration = 0
     improved = True
+
+    # Continua finché ci sono miglioramenti e non si raggiunge il numero massimo di iterazioni
     while improved and iteration < max_iterations:
         improved = False
         iteration += 1
-        tree_edges = list(current_tree.edges(data=True))
+        tree_edges = list(current_tree.edges(data=True))  # Ottieni tutti gli archi dell'albero corrente
+
+        # Prova a rimuovere ogni arco e sostituirlo con un altro per migliorare il costo
         for u, v, data in tree_edges:
             T_temp = current_tree.copy()
-            T_temp.remove_edge(u, v)
-            components = list(nx.connected_components(T_temp))
+            T_temp.remove_edge(u, v)  # Rimuovi l'arco corrente
+            components = list(nx.connected_components(T_temp))  # Trova le componenti connesse
+
+            # Se la rimozione dell'arco non divide l'albero in due componenti, continua
             if len(components) != 2:
                 continue
+
             comp1, comp2 = components
+
+            # Prova a trovare un nuovo arco che collega le due componenti
             for x, y, edata in G.edges(data=True):
                 if current_tree.has_edge(x, y) or current_tree.has_edge(y, x):
                     continue
                 if (x in comp1 and y in comp2) or (x in comp2 and y in comp1):
                     new_tree = T_temp.copy()
-                    new_tree.add_edge(x, y, weight=edata.get('weight', 1))
+                    new_tree.add_edge(x, y, weight=edata.get('weight', 1))  # Aggiungi il nuovo arco
+
+                    # Verifica se il nuovo albero è valido e rispetta il vincolo di grado
                     if new_tree.number_of_edges() != G.number_of_nodes() - 1:
                         continue
                     if not is_degree_valid(new_tree, root, k):
                         continue
-                    new_cost = compute_tree_cost(new_tree)
+
+                    new_cost = compute_tree_cost(new_tree)  # Calcola il costo del nuovo albero
+
+                    # Se il nuovo albero ha un costo inferiore, aggiorna l'albero corrente
                     if new_cost < current_cost:
                         current_tree = new_tree
                         current_cost = new_cost
@@ -375,54 +406,73 @@ def local_search_spanning_tree(G, initial_tree, root, k, max_iterations=100):
                         break
             if improved:
                 break
-    return current_tree
+
+    return current_tree  # Ritorna l'albero migliorato
 
 # Simulated Annealing per migliorare lo spanning tree
 def simulated_annealing_spanning_tree(G, initial_tree, root, k, initial_temp=1000, cooling_rate=0.95, iterations_per_temp=50, min_temp=1e-3):
-    current_tree = initial_tree.copy()
-    current_cost = compute_tree_cost(current_tree)
-    best_tree = current_tree.copy()
-    best_cost = current_cost
-    temperature = initial_temp
+    current_tree = initial_tree.copy()  # Copia l'albero iniziale
+    current_cost = compute_tree_cost(current_tree)  # Calcola il costo dell'albero corrente
+    best_tree = current_tree.copy()  # Inizializza il miglior albero come l'albero corrente
+    best_cost = current_cost  # Inizializza il miglior costo come il costo corrente
+    temperature = initial_temp  # Imposta la temperatura iniziale
+
+    # Continua finché la temperatura non scende sotto il minimo
     while temperature > min_temp:
         for _ in range(iterations_per_temp):
-            tree_edges = list(current_tree.edges(data=True))
+            tree_edges = list(current_tree.edges(data=True))  # Ottieni tutti gli archi dell'albero corrente
             if not tree_edges:
                 continue
+
+            # Seleziona un arco casuale da rimuovere
             edge_to_remove = random.choice(tree_edges)
             u, v, data = edge_to_remove
             temp_tree = current_tree.copy()
-            temp_tree.remove_edge(u, v)
+            temp_tree.remove_edge(u, v)  # Rimuovi l'arco selezionato
+
+            # Trova le componenti connesse dopo la rimozione dell'arco
             components = list(nx.connected_components(temp_tree))
             if len(components) != 2:
                 continue
             comp1, comp2 = components
+
+            # Trova tutti i possibili archi che possono collegare le due componenti
             candidate_edges = []
             for x, y, edata in G.edges(data=True):
                 if current_tree.has_edge(x, y) or current_tree.has_edge(y, x):
                     continue
                 if (x in comp1 and y in comp2) or (x in comp2 and y in comp1):
                     candidate_edges.append((x, y, edata.get('weight', 1)))
+
             if not candidate_edges:
                 continue
+
+            # Seleziona un nuovo arco casuale da aggiungere
             new_edge = random.choice(candidate_edges)
             x, y, weight_new = new_edge
             new_tree = temp_tree.copy()
-            new_tree.add_edge(x, y, weight=weight_new)
+            new_tree.add_edge(x, y, weight=weight_new)  # Aggiungi il nuovo arco
+
+            # Verifica se il nuovo albero è valido e rispetta il vincolo di grado
             if new_tree.number_of_edges() != G.number_of_nodes() - 1:
                 continue
             if not is_degree_valid(new_tree, root, k):
                 continue
-            new_cost = compute_tree_cost(new_tree)
+
+            new_cost = compute_tree_cost(new_tree)  # Calcola il costo del nuovo albero
             delta = new_cost - current_cost
+
+            # Accetta il nuovo albero con una probabilità che dipende dalla temperatura
             if delta < 0 or random.random() < math.exp(-delta / temperature):
                 current_tree = new_tree
                 current_cost = new_cost
                 if current_cost < best_cost:
                     best_tree = current_tree.copy()
                     best_cost = current_cost
-        temperature *= cooling_rate
-    return best_tree
+
+        temperature *= cooling_rate  # Riduci la temperatura
+
+    return best_tree  # Ritorna il miglior albero trovato
 
 # Funzione per testare un'istanza e raccogliere metriche di performance
 def test_instance(G, root, k):

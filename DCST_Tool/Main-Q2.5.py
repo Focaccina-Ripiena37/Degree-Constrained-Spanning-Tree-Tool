@@ -62,6 +62,10 @@ class App:
         self.n_medium = tk.IntVar(value=50)  # Numero di nodi medio (default: 50)
         self.n_large = tk.IntVar(value=200)  # Numero di nodi grande (default: 200)
 
+        # Variabile per il thread di calcolo
+        self.computation_thread = None
+        self.stop_event = threading.Event()
+
         # Etichette e campi di input
         self.create_widgets()
 
@@ -82,6 +86,9 @@ class App:
         # Aggiungere l'icona GitHub
         self.add_github_icon()
 
+        # Chiudere il terminale quando la finestra viene chiusa
+        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+
     def create_widgets(self):
         frame = tk.Frame(self.root, bg="#2b2b2b")
         frame.pack(pady=20)
@@ -97,12 +104,16 @@ class App:
         tk.Label(frame, text="Istanza media:", fg="white", bg="#2b2b2b").grid(row=2, column=0, padx=5, pady=5)
         tk.Entry(frame, textvariable=self.n_medium, width=10).grid(row=2, column=1, padx=5, pady=5)
 
-        tk.Label(frame, text="Istanzza grande:", fg="white", bg="#2b2b2b").grid(row=3, column=0, padx=5, pady=5)
+        tk.Label(frame, text="Istanza grande:", fg="white", bg="#2b2b2b").grid(row=3, column=0, padx=5, pady=5)
         tk.Entry(frame, textvariable=self.n_large, width=10).grid(row=3, column=1, padx=5, pady=5)
 
         # Bottone per avviare i calcoli
         start_button = tk.Button(frame, text="Avvia", command=self.start_computation, bg="#3399ff", fg="white")
-        start_button.grid(row=4, column=0, columnspan=2, pady=20)
+        start_button.grid(row=4, column=0, pady=20)
+
+        # Bottone per fermare i calcoli
+        stop_button = tk.Button(frame, text="Stop", command=self.stop_computation, bg="#ff3333", fg="white")
+        stop_button.grid(row=4, column=1, pady=20)
 
     def add_github_icon(self):
         try:
@@ -143,12 +154,23 @@ class App:
             if n_small <= 0 or n_medium <= 0 or n_large <= 0:
                 raise ValueError("Il numero di nodi deve essere positivo.")
 
+            # Resettare l'evento di stop
+            self.stop_event.clear()
+
             # Avviare un thread separato per i calcoli
-            computation_thread = threading.Thread(target=self.run_optimization, args=(n_small, n_medium, n_large))
-            computation_thread.start()
+            self.computation_thread = threading.Thread(target=self.run_optimization, args=(n_small, n_medium, n_large))
+            self.computation_thread.start()
 
         except Exception as e:
             messagebox.showerror("Errore", str(e))
+
+    def stop_computation(self):
+        if self.computation_thread and self.computation_thread.is_alive():
+            self.stop_event.set()
+            self.computation_thread.join()
+            self.progress_bar["value"] = 0
+            self.progress_label.config(text="")
+            messagebox.showinfo("Interrotto", "Calcolo interrotto dall'utente.")
 
     def run_optimization(self, n_small, n_medium, n_large):
         try:
@@ -187,6 +209,10 @@ class App:
             self.queue.put(("progress", 0, steps, "Inizio calcoli..."))
 
             for i, (G, size) in enumerate([(G_small, n_small), (G_medium, n_medium), (G_large, n_large)]):
+                if self.stop_event.is_set():
+                    self.queue.put(("info", "Calcolo interrotto dall'utente."))
+                    return
+
                 self.queue.put(("progress", i, steps, f"Calcolo per istanza con {size} nodi..."))
                 metrics = test_instance(G, root=0, k=3)
                 if metrics:
@@ -207,7 +233,7 @@ class App:
                         draw_and_save_graph(metrics['local_tree'], os.path.join(plot_dir, f"local_tree_small_{n_small}.png"))
                         draw_and_save_graph(metrics['sa_tree'], os.path.join(plot_dir, f"sa_tree_small_{n_small}.png"))
                 else:
-                    print(f"Impossibile trovare uno spanning tree valido per l'istanza {size}.")
+                    self.queue.put(("error", f"Impossibile trovare uno spanning tree valido per l'istanza {size}."))
                 self.queue.put(("progress", i + 1, steps, f"Completato calcolo per {size} nodi"))
 
             self.queue.put(("info", "Calcoli completati con successo."))
@@ -234,6 +260,13 @@ class App:
         finally:
             self.root.after(100, self.process_queue)
 
+    def on_closing(self):
+        if self.computation_thread and self.computation_thread.is_alive():
+            self.stop_event.set()
+            self.computation_thread.join()
+        self.root.destroy()
+        os._exit(0)
+
 # Funzione per generare un grafo casuale pesato (non completo)
 def generate_random_graph(n, p, seed=None):
     G = nx.gnp_random_graph(n, p, seed=seed)
@@ -243,12 +276,15 @@ def generate_random_graph(n, p, seed=None):
 
 # Funzione per generare un grafo casuale pesato e connesso
 def generate_connected_random_graph(n, p, seed=None):
-    while True:
+    attempts = 0
+    while attempts < 100:  # Limite di tentativi per evitare loop infiniti
         G = nx.gnp_random_graph(n, p, seed=seed)
         if nx.is_connected(G):
             for (u, v) in G.edges():
                 G.edges[u, v]['weight'] = random.randint(1, 10)
             return G
+        attempts += 1
+    raise ValueError(f"Impossibile generare un grafo connesso per n={n}, p={p} dopo 100 tentativi.")
 
 # Funzione per disegnare e salvare i grafici
 def draw_and_save_graph(G, filename):
@@ -391,35 +427,40 @@ def simulated_annealing_spanning_tree(G, initial_tree, root, k, initial_temp=100
 # Funzione per testare un'istanza e raccogliere metriche di performance
 def test_instance(G, root, k):
     metrics = {}
-    # Strategia Greedy
-    start = time.time()
-    greedy_tree = greedy_degree_constrained_spanning_tree(G, root, k)
-    greedy_time = time.time() - start
-    if greedy_tree is None:
+    try:
+        # Strategia Greedy
+        start = time.time()
+        greedy_tree = greedy_degree_constrained_spanning_tree(G, root, k)
+        greedy_time = time.time() - start
+        if greedy_tree is None:
+            raise ValueError("Non è possibile costruire uno spanning tree che rispetti il vincolo di grado.")
+        greedy_cost = compute_tree_cost(greedy_tree.to_undirected())
+        metrics['greedy_cost'] = greedy_cost
+        metrics['greedy_time'] = greedy_time
+        metrics['greedy_tree'] = greedy_tree.to_undirected()
+
+        # Ricerca Locale
+        initial_tree = greedy_tree.to_undirected()
+        start = time.time()
+        local_tree = local_search_spanning_tree(G, initial_tree, root, k)
+        local_time = time.time() - start
+        local_cost = compute_tree_cost(local_tree)
+        metrics['local_cost'] = local_cost
+        metrics['local_time'] = local_time
+        metrics['local_tree'] = local_tree
+
+        # Simulated Annealing
+        start = time.time()
+        sa_tree = simulated_annealing_spanning_tree(G, initial_tree, root, k, initial_temp=1000, cooling_rate=0.95, iterations_per_temp=50)
+        sa_time = time.time() - start
+        sa_cost = compute_tree_cost(sa_tree)
+        metrics['sa_cost'] = sa_cost
+        metrics['sa_time'] = sa_time
+        metrics['sa_tree'] = sa_tree
+
+    except Exception as e:
+        print(f"Errore durante il test dell'istanza: {e}")
         return None
-    greedy_cost = compute_tree_cost(greedy_tree.to_undirected())
-    metrics['greedy_cost'] = greedy_cost
-    metrics['greedy_time'] = greedy_time
-    metrics['greedy_tree'] = greedy_tree.to_undirected()
-
-    # Ricerca Locale
-    initial_tree = greedy_tree.to_undirected()
-    start = time.time()
-    local_tree = local_search_spanning_tree(G, initial_tree, root, k)
-    local_time = time.time() - start
-    local_cost = compute_tree_cost(local_tree)
-    metrics['local_cost'] = local_cost
-    metrics['local_time'] = local_time
-    metrics['local_tree'] = local_tree
-
-    # Simulated Annealing
-    start = time.time()
-    sa_tree = simulated_annealing_spanning_tree(G, initial_tree, root, k, initial_temp=1000, cooling_rate=0.95, iterations_per_temp=50)
-    sa_time = time.time() - start
-    sa_cost = compute_tree_cost(sa_tree)
-    metrics['sa_cost'] = sa_cost
-    metrics['sa_time'] = sa_time
-    metrics['sa_tree'] = sa_tree
 
     return metrics
 

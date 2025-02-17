@@ -5,13 +5,13 @@
 Questo programma fornisce un'interfaccia grafica per la generazione e l'analisi di alberi di copertura con vincoli di grado. Utilizza diversi algoritmi per ottimizzare la costruzione degli alberi e visualizzarne i risultati.
 
 ## Requisiti
-Il programma è scritto in **Python** e richiede diverse librerie esterne per funzionare correttamente. É richiesto che sul sistema sia giá installato Python v3.7 o successive. Potete installarlo da cmd su windows con:
+Il programma è scritto in **Python** e richiede diverse librerie esterne per funzionare correttamente. É richiesto che sul sistema sia giá installato Python v3.7 o successive. Potete installarlo da cmd su Windows con:
    
 ```
 winget install Python.Python.3.10
 ```
 
-in alternativa dalla [pagina ufficiale](https://www.python.org/downloads/windows/)
+in alternativa dalla [pagina ufficiale](https://www.python.org/downloads/windows/).
 
 Per installare le restanti dipendenze usare il file `install_dependencies.cmd` fornito assieme al codice sorgente.
 

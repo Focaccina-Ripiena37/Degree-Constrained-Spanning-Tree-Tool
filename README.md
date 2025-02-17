@@ -65,7 +65,7 @@ Il programma gestisce e riporta eventuali errori che possono verificarsi durante
 Se un'istanza specifica non può essere processata, ma le altre sì, allora nella cartella **Plot** saranno presenti solo le immagini relative alle istanze che hanno avuto successo. Nessuna immagine sarà creata per quelle problematiche.
 
 ## Supporto
-Per segnalazioni o richieste di aiuto, aprire un'issue su GitHub o contattare l'autore.
+Si avvisa che il supporto é garantito solo su Windows 10 o successivi. Per segnalazioni o richieste di aiuto, aprire un'issue su GitHub o contattare l'autore.
 
 ![app](https://github.com/user-attachments/assets/c7cceac5-3174-44e0-b763-a29aafe397e7)
 

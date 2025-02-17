@@ -11,7 +11,7 @@ Il programma è scritto in **Python** e richiede diverse librerie esterne per fu
 winget install Python.Python.3.10
 ```
 
-in alternativa dalla [pagina ufficiale](https://www.python.org/downloads/windows/).
+in alternativa dalla 🔗[pagina ufficiale](https://www.python.org/downloads/windows/).
 
 Per installare le restanti dipendenze usare il file `install_dependencies.cmd` fornito assieme al codice sorgente.
 

@@ -39,7 +39,7 @@ Per avviare il programma:
 1. Assicurati di aver installato tutte le dipendenze.
 2. Esegui il seguente comando nel terminale:
    ```sh
-   python Main-Q2.5.py
+   python Main.py
    ```
 
 ## Funzionamento

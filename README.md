@@ -34,7 +34,7 @@ L'app implementa tre algoritmi:
 
 ## 📦 Esecuzione
 
-### ✅ Modalità 1: Eseguibile standalone
+### ✅ 1) Eseguibile standalone
 
 Vai nella [sezione Releases](../../releases) e scarica il file per il tuo sistema:
 
@@ -45,7 +45,7 @@ Vai nella [sezione Releases](../../releases) e scarica il file per il tuo sistem
 Non richiede Python né librerie esterne.
 
 
-### 🐍 Modalità 2: Esecuzione da codice sorgente
+### 🐍 2) Esecuzione da codice sorgente
 
 #### 📌 1. Clona il repository
 ```bash

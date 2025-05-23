@@ -68,5 +68,5 @@ Se un'istanza specifica non può essere processata, ma le altre sì, allora nell
 ## Supporto
 Si avvisa che il supporto é garantito solo su Windows 10 o successivi. Per segnalazioni o richieste di aiuto, aprire un'issue su GitHub o contattare l'autore.
 
-![app](https://github.com/user-attachments/assets/c7cceac5-3174-44e0-b763-a29aafe397e7)
+![app](https://github.com/user-attachments/assets/9945cf16-b034-42d2-8862-95e56c560e2c)
 

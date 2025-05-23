@@ -101,7 +101,7 @@ Troverai:
 ## 📦 Rilascio binari
 
 Trovi gli eseguibili già compilati nella sezione [Releases](../../releases).
-Supporto: Windows, macOS, Linux.
+Supporto: Windows.
 
 ---
 

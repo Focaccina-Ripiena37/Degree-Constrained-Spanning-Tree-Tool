@@ -1,11 +1,3 @@
-Perfetto Lorenzo, ecco una versione **più completa del `README.md`**, ottimizzata per la homepage della tua repo:
-
-* ✅ Compatta ma informativa
-* 📦 Con istruzioni per l’eseguibile **e** per l’avvio via sorgente
-* 🛠 Include installazione dipendenze e info pratiche
-
----
-
 # 🌳 DCST Tool – Degree-Constrained Spanning Tree App
 
 **DCST Tool** è un’applicazione con interfaccia grafica sviluppata in Python per affrontare il problema dell’**albero di copertura con vincolo di grado (DCST)**, un problema noto in Ricerca Operativa per la sua complessità (NP-Hard).  
@@ -99,14 +91,6 @@ Troverai:
 
 ---
 
-## 📚 Background teorico
-
-Il problema DCST estende l'MST imponendo limiti al numero di figli per ogni nodo (`max_children`).
-È stato dimostrato **NP-Hard anche per k=2**.
-La nostra app impiega euristiche sequenziali, perfezionate con una metaeuristica di tipo Simulated Annealing per evitare ottimi locali.
-
----
-
 ## 🧪 Tecnologie usate
 
 * 🐍 Python 3.11
@@ -124,8 +108,6 @@ Supporto: Windows, macOS, Linux.
 ## 📬 Contatti
 
 Per problemi, suggerimenti o contributi: apri una [Issue](../../issues).
-
----
 
 🚀 *Progetto sviluppato per il corso di Ricerca Operativa – A.A. 2024/2025*
 

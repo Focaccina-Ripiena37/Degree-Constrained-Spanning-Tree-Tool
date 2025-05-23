@@ -1,72 +1,136 @@
-<h1 align="center">❗ Not yet completed ❗</h1>
+Perfetto Lorenzo, ecco una versione **più completa del `README.md`**, ottimizzata per la homepage della tua repo:
 
-# DCST Tool
+* ✅ Compatta ma informativa
+* 📦 Con istruzioni per l’eseguibile **e** per l’avvio via sorgente
+* 🛠 Include installazione dipendenze e info pratiche
 
-## Descrizione
-Questo programma fornisce un'interfaccia grafica per la generazione e l'analisi di alberi di copertura con vincoli di grado. Utilizza diversi algoritmi per ottimizzare la costruzione degli alberi e visualizzarne i risultati.
+---
 
-## Requisiti
-Il programma è scritto in **Python** e richiede diverse librerie esterne per funzionare correttamente. É richiesto che sul sistema sia giá installato Python v3.7 o successive. Potete installarlo da cmd su Windows con:
-   
+````markdown
+# 🌳 DCST Tool – Degree-Constrained Spanning Tree App
+
+**DCST Tool** è un’applicazione con interfaccia grafica sviluppata in Python per affrontare il problema dell’**albero di copertura con vincolo di grado (DCST)**, un problema noto in Ricerca Operativa per la sua complessità (NP-Hard).  
+L'app è stata progettata per fini didattici e di ricerca, con particolare attenzione alla **modularità**, **usabilità** e **visualizzazione dei risultati**.
+
+**TESTO DEL PROBLEMA: **
+Dato un grafo pesato, non completo, e un nodo r, si cerca lo spanning tree di costo minimo di radice r tale
+che ogni nodo non abbia piú di k figli.
+
+---
+
+## 🧠 Obiettivo
+
+Trovare alberi di copertura su grafi con vincolo di grado massimo su ogni nodo.  
+L'app implementa tre algoritmi:
+
+- ⚙️ **Greedy** – costruttivo, rapido ma sub-ottimo
+- 🔁 **Local Search** – migliora la soluzione greedy, correggendo le violazioni
+- 🔥 **Simulated Annealing** – metaeuristica per esplorazione avanzata dello spazio delle soluzioni
+
+---
+
+## 🖼️ Interfaccia grafica (Tkinter)
+
+- Impostazione parametri: nodi per istanze (piccola, media, grande), probabilità `p`, `max_children`, penalità
+- Visualizzazione grafica dell’avanzamento
+- Barra di stato e log testuale in tempo reale
+- Esportazione automatica su desktop di:
+  - grafi (`grafo_iniziale_...`)
+  - alberi ottimizzati
+  - tabelle comparative
+
+---
+
+## 📦 Esecuzione
+
+### ✅ Modalità 1: Eseguibile standalone
+
+Vai nella [sezione Releases](../../releases) e scarica il file per il tuo sistema:
+
+- 🪟 `DCST_Tool_Windows.exe`
+- 🍎 ~~`DCST_Tool_macOS`~~
+- 🐧 ~~`DCST_Tool_Linux`~~
+
+Non richiede Python né librerie esterne.
+
+---
+
+### 🐍 Modalità 2: Esecuzione da codice sorgente
+
+#### 📌 1. Clona il repository
+```bash
+git clone https://github.com/Focaccina-Ripiena37/Degree-Constrained-Spanning-Tree-Tool.git
+cd Degree-Constrained-Spanning-Tree-Tool
+````
+
+#### 📌 2. Crea ambiente virtuale (opzionale ma consigliato)
+
+```bash
+python -m venv venv
+source venv/bin/activate      # su Linux/macOS
+venv\Scripts\activate.bat     # su Windows
 ```
-winget install Python.Python.3.10
+
+#### 📌 3. Installa le dipendenze
+
+```bash
+pip install matplotlib pandas networkx pillow
 ```
 
-in alternativa dalla 🔗[pagina ufficiale](https://www.python.org/downloads/windows/).
+#### 📌 4. Avvia l’app
 
-Per installare le restanti dipendenze usare il file `install_dependencies.cmd` fornito assieme al codice sorgente.
-
-### Dipendenze richieste
-Le seguenti librerie devono essere installate:
-- `networkx`
-- `matplotlib`
-- `pandas`
-- `tabulate`
-- `numpy`
-- `tkinter`
-- `tqdm`
-- `Pillow`
-
-## Installazione delle dipendenze
-Puoi installare tutte le dipendenze necessarie eseguendo il file `install_dependencies.cmd` su Windows.
-
-In alternativa, puoi installarle manualmente con il seguente comando:
-```sh
-pip install networkx matplotlib pandas tabulate numpy tqdm Pillow
+```bash
+python run.py
 ```
 
-## Esecuzione del programma
-Per avviare il programma:
-1. Assicurati di aver installato tutte le dipendenze.
-2. Esegui il seguente comando nel terminale:
-   ```sh
-   python Main.py
-   ```
+---
 
-## Funzionamento
-L'interfaccia consente di:
-- Impostare il numero di nodi per istanze piccole, medie e grandi.
-- Avviare il calcolo degli alberi di copertura con diversi algoritmi.
-- Visualizzare e salvare i risultati generati in formato immagine.
+## 📁 Output
 
-## Salvataggio dei risultati
-I file immagine generati dal programma vengono salvati automaticamente nella cartella **Plot** situata sul **Desktop** dell'utente. 
-I risultati includono:
-- Grafici dei grafi generati.
-- Alberi di copertura ottenuti tramite diversi algoritmi.
-- Tabelle con i risultati delle analisi, salvate come immagini.
+Al termine dell’ottimizzazione, i risultati verranno salvati automaticamente in:
 
-## Gestione degli errori
-Il programma gestisce e riporta eventuali errori che possono verificarsi durante l'esecuzione. Di seguito, alcune delle situazioni più comuni:
+```bash
+~/Desktop/Plot
+```
 
-- **Errore nella generazione del grafo:** se il programma non riesce a creare un grafo connesso dopo numerosi tentativi, viene mostrato un messaggio di errore e l'istanza non verrà processata.
-- **Errore nella costruzione dello spanning tree:** se non è possibile costruire un albero di copertura che rispetti i vincoli imposti, l'istanza verrà ignorata e non sarà presente alcuna immagine nella cartella **Plot**.
-- **Errore nei calcoli:** se durante il calcolo si verificano problemi, il programma li segnalerà tramite una finestra di errore o un messaggio nel terminale.
+Troverai:
 
-Se un'istanza specifica non può essere processata, ma le altre sì, allora nella cartella **Plot** saranno presenti solo le immagini relative alle istanze che hanno avuto successo. Nessuna immagine sarà creata per quelle problematiche.
+* Grafi iniziali
+* Alberi ottimizzati (Greedy, LS, SA)
+* Tabella di confronto (PNG)
 
-## Supporto
-Si avvisa che il supporto é garantito solo su Windows 10 o successivi. Per segnalazioni o richieste di aiuto, aprire un'issue su GitHub o contattare l'autore.
+---
 
-![app](https://github.com/user-attachments/assets/9945cf16-b034-42d2-8862-95e56c560e2c)
+## 📚 Background teorico
 
+Il problema DCST estende l'MST imponendo limiti al numero di figli per ogni nodo (`max_children`).
+È stato dimostrato **NP-Hard anche per k=2**.
+La nostra app impiega euristiche sequenziali, perfezionate con una metaeuristica di tipo Simulated Annealing per evitare ottimi locali.
+
+---
+
+## 🧪 Tecnologie usate
+
+* 🐍 Python 3.11
+* 🎨 Tkinter (GUI)
+* 📈 Matplotlib, NetworkX, PIL
+* ⚙️ PyInstaller per le build multipiattaforma
+
+---
+
+## 📦 Rilascio binari
+
+Trovi gli eseguibili già compilati nella sezione [Releases](../../releases).
+Supporto: Windows, macOS, Linux.
+
+---
+
+## 📬 Contatti
+
+Per problemi, suggerimenti o contributi: apri una [Issue](../../issues).
+
+---
+
+🚀 *Progetto sviluppato per il corso di Ricerca Operativa – A.A. 2024/2025*
+
+```

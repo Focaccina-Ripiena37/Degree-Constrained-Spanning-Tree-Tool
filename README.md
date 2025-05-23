@@ -28,7 +28,6 @@ L'app implementa tre algoritmi:
 - 🔁 **Local Search** – migliora la soluzione greedy, correggendo le violazioni
 - 🔥 **Simulated Annealing** – metaeuristica per esplorazione avanzata dello spazio delle soluzioni
 
----
 
 ## 🖼️ Interfaccia grafica (Tkinter)
 
@@ -40,7 +39,6 @@ L'app implementa tre algoritmi:
   - alberi ottimizzati
   - tabelle comparative
 
----
 
 ## 📦 Esecuzione
 
@@ -54,7 +52,6 @@ Vai nella [sezione Releases](../../releases) e scarica il file per il tuo sistem
 
 Non richiede Python né librerie esterne.
 
----
 
 ### 🐍 Modalità 2: Esecuzione da codice sorgente
 
@@ -116,8 +113,6 @@ La nostra app impiega euristiche sequenziali, perfezionate con una metaeuristica
 * 🎨 Tkinter (GUI)
 * 📈 Matplotlib, NetworkX, PIL
 * ⚙️ PyInstaller per le build multipiattaforma
-
----
 
 ## 📦 Rilascio binari
 

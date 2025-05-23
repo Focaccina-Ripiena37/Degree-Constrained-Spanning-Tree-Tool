@@ -134,4 +134,3 @@ Per problemi, suggerimenti o contributi: apri una [Issue](../../issues).
 
 🚀 *Progetto sviluppato per il corso di Ricerca Operativa – A.A. 2024/2025*
 
-```

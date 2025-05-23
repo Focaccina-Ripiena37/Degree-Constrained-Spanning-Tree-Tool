@@ -12,7 +12,7 @@ Perfetto Lorenzo, ecco una versione **più completa del `README.md`**, ottimizza
 L'app è stata progettata per fini didattici e di ricerca, con particolare attenzione alla **modularità**, **usabilità** e **visualizzazione dei risultati**.
 
 ````markdown
-**TESTO DEL PROBLEMA: **
+TESTO DEL PROBLEMA:
 Dato un grafo pesato, non completo, e un nodo r, si cerca lo spanning tree di costo minimo di radice r tale
 che ogni nodo non abbia piú di k figli.
 ````

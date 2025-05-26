@@ -8,9 +8,6 @@ TESTO DEL PROBLEMA:
 Dato un grafo pesato, non completo, e un nodo r, si cerca lo spanning tree di costo minimo di radice r tale
 che ogni nodo non abbia piú di k figli.
 ````
-
-![{BF3F29EC-E5B9-417A-A52D-0CE5E141BB9A}](https://github.com/user-attachments/assets/3ec546a1-8cfe-47b5-afbf-5cd3a60d280e)
-
 ---
 
 ## 🧠 Obiettivo
@@ -32,6 +29,8 @@ L'app implementa tre algoritmi:
   - grafi (`grafo_iniziale_...`)
   - alberi ottimizzati
   - tabelle comparative
+
+![{BF3F29EC-E5B9-417A-A52D-0CE5E141BB9A}](https://github.com/user-attachments/assets/5ed74a13-2788-4796-b93e-6845b89ed639)
 
 
 ## 📦 Esecuzione

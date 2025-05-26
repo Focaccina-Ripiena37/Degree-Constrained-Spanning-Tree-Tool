@@ -26,9 +26,9 @@ L'app implementa tre algoritmi:
 - Visualizzazione grafica dell’avanzamento
 - Barra di stato e log testuale in tempo reale
 - Esportazione automatica su desktop di:
-  - grafi (`grafo_iniziale_...`)
+  - grafi
   - alberi ottimizzati
-  - tabelle comparative
+  - tabella comparativa
 
 ![{BF3F29EC-E5B9-417A-A52D-0CE5E141BB9A}](https://github.com/user-attachments/assets/5ed74a13-2788-4796-b93e-6845b89ed639)
 

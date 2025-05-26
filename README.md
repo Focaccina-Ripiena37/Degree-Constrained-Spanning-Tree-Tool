@@ -9,6 +9,8 @@ Dato un grafo pesato, non completo, e un nodo r, si cerca lo spanning tree di co
 che ogni nodo non abbia piú di k figli.
 ````
 
+![{BF3F29EC-E5B9-417A-A52D-0CE5E141BB9A}](https://github.com/user-attachments/assets/3ec546a1-8cfe-47b5-afbf-5cd3a60d280e)
+
 ---
 
 ## 🧠 Obiettivo

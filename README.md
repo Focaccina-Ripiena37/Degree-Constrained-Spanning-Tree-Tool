@@ -30,45 +30,24 @@ L'app implementa tre algoritmi:
   - alberi ottimizzati
   - tabella comparativa
 
-![{BF3F29EC-E5B9-417A-A52D-0CE5E141BB9A}](https://github.com/user-attachments/assets/5ed74a13-2788-4796-b93e-6845b89ed639)
+![{0D7070D1-43B6-43CF-A4B7-F56DF2413700}](https://github.com/user-attachments/assets/6b290961-4e20-473c-9a97-4db2cc74fa66)
 
 
-## 📦 Esecuzione
-
-### ✅ 1) Eseguibile standalone
-
-Vai nella [sezione Releases](../../releases) e scarica il file per il tuo sistema:
-
-- 🪟 `DCST_Tool_Windows.exe`
-- 🍎 ~~`DCST_Tool_macOS`~~
-- 🐧 ~~`DCST_Tool_Linux`~~
-
-Non richiede Python né librerie esterne.
-
-
-### 🐍 2) Esecuzione da codice sorgente
+## 🐍 Esecuzione da codice sorgente Windows
 
 #### 📌 1. Clona il repository
 ```bash
 git clone https://github.com/Focaccina-Ripiena37/Degree-Constrained-Spanning-Tree-Tool.git
 cd Degree-Constrained-Spanning-Tree-Tool
-
-
-#### 📌 2. Crea ambiente virtuale (opzionale ma consigliato)
-
-```bash
-python -m venv venv
-source venv/bin/activate      # su Linux/macOS
-venv\Scripts\activate.bat     # su Windows
 ```
 
-#### 📌 3. Installa le dipendenze
+#### 📌 2. Installa le dipendenze
 
-```bash
-pip install matplotlib pandas networkx pillow
-```
+Esegui il file `install_dependencies.cmd` come Amministratore
 
 #### 📌 4. Avvia l’app
+
+Spostati nella main directory e esegui: 
 
 ```bash
 python run.py
@@ -86,9 +65,10 @@ Al termine dell’ottimizzazione, i risultati verranno salvati automaticamente i
 
 Troverai:
 
-* Grafi iniziali
+* Grafi iniziali (PNG)
 * Alberi ottimizzati (Greedy, LS, SA)
 * Tabella di confronto (PNG)
+* Grafico dei punteggi (PNG)
 
 ---
 
@@ -97,12 +77,10 @@ Troverai:
 * 🐍 Python 3.11
 * 🎨 Tkinter (GUI)
 * 📈 Matplotlib, NetworkX, PIL
-* ⚙️ PyInstaller per le build multipiattaforma
 
-## 📦 Rilascio binari
+## 📦 Supporto
 
-Trovi gli eseguibili già compilati nella sezione [Releases](../../releases).
-Supporto: Windows.
+- **Windows 10/11**
 
 ---
 

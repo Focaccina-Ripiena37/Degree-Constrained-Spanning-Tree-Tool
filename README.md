@@ -40,7 +40,7 @@ cd Degree-Constrained-Spanning-Tree-Tool
 
 #### 📌 2. Installa le dipendenze
 
-Esegui il file `install_dependencies.cmd` come Amministratore
+Esegui il file `install_dependencies.cmd` come **Amministratore**
 
 #### 📌 4. Avvia l’app
 

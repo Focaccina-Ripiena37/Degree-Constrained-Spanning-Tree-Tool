@@ -44,7 +44,11 @@ Esegui il file `install_dependencies.cmd` come **Amministratore**
 
 #### 📌 4. Avvia l’app
 
-Spostati nella main directory e esegui: 
+Doppio clic sul file `play.vbs` 
+
+...oppure...
+
+Spostati nella main directory da terminale ed esegui: 
 
 ```bash
 python run.py

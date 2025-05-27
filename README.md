@@ -65,10 +65,10 @@ Al termine dell’ottimizzazione, i risultati verranno salvati automaticamente i
 
 Troverai:
 
-* Grafi iniziali (PNG)
-* Alberi ottimizzati (Greedy, LS, SA)
-* Tabella di confronto (PNG)
-* Grafico dei punteggi (PNG)
+* Grafi iniziali
+* Alberi ottimizzati
+* Tabella di confronto
+* Grafico dei punteggi
 
 ---
 

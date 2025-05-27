@@ -25,10 +25,7 @@ L'app implementa tre algoritmi:
 - Impostazione parametri: nodi per istanze (piccola, media, grande), probabilità `p`, `max_children`, penalità
 - Visualizzazione grafica dell’avanzamento
 - Barra di stato e log testuale in tempo reale
-- Esportazione automatica su desktop di:
-  - grafi
-  - alberi ottimizzati
-  - tabella comparativa
+- Esportazione automatica di file su desktop
 
 ![{0D7070D1-43B6-43CF-A4B7-F56DF2413700}](https://github.com/user-attachments/assets/6b290961-4e20-473c-9a97-4db2cc74fa66)
 

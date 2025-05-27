@@ -8,7 +8,6 @@ TESTO DEL PROBLEMA:
 Dato un grafo pesato, non completo, e un nodo r, si cerca lo spanning tree di costo minimo di radice r tale
 che ogni nodo non abbia piú di k figli.
 ````
----
 
 ## 🧠 Obiettivo
 
@@ -19,22 +18,31 @@ Risolvere il problema mettendo a paragone tre diverse strategie:
 - 🔥 **Simulated Annealing** – metaeuristica per esplorazione avanzata dello spazio delle soluzioni
 
 
-## 🖼️ Interfaccia grafica (Tkinter)
+## 🖼️ Funzionalitá
 
-- Impostazione parametri: nodi per istanze (piccola, media, grande), probabilità `p`, `max_children`, penalità
+Il programma dispone di una semplice interfaccia grafica (GUI) realizzata in Tkinter che consente di:
+- Impostare i parametri per la ricerca
 - Visualizzazione grafica dell’avanzamento
 - Barra di stato e log testuale in tempo reale
+
+Le altre funzionalitá base sono:
 - Esportazione automatica di file su desktop
 
 ![{0D7070D1-43B6-43CF-A4B7-F56DF2413700}](https://github.com/user-attachments/assets/6b290961-4e20-473c-9a97-4db2cc74fa66)
 
+---
 
-## 🐍 Esecuzione da codice sorgente Windows
+## 🐍 Come eseguire il programma
 
-#### 📌 1. Clona il repository
+#### 📌 1. Clona la repository
+
 ```bash
 git clone https://github.com/Focaccina-Ripiena37/Degree-Constrained-Spanning-Tree-Tool.git
 ```
+
+⚠️Necessita avere [Git per Windows](https://git-scm.com/downloads/win) installato
+
+O scarica la repo da questa pagina come .zip
 
 #### 📌 2. Installa le dipendenze
 

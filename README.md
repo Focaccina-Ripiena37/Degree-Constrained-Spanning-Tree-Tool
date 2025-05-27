@@ -12,8 +12,7 @@ che ogni nodo non abbia piú di k figli.
 
 ## 🧠 Obiettivo
 
-Trovare alberi di copertura su grafi con vincolo di grado massimo su ogni nodo.  
-L'app implementa tre algoritmi:
+Risolvere il problema mettendo a paragone tre diverse strategie:
 
 - ⚙️ **Greedy** – costruttivo, rapido ma sub-ottimo
 - 🔁 **Local Search** – migliora la soluzione greedy, correggendo le violazioni

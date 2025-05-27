@@ -35,7 +35,6 @@ L'app implementa tre algoritmi:
 #### 📌 1. Clona il repository
 ```bash
 git clone https://github.com/Focaccina-Ripiena37/Degree-Constrained-Spanning-Tree-Tool.git
-cd Degree-Constrained-Spanning-Tree-Tool
 ```
 
 #### 📌 2. Installa le dipendenze

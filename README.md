@@ -34,7 +34,7 @@ Le altre funzionalitá base sono:
 
 ## 🐍 Come eseguire il programma
 
-### 🪟 WINDOWS 10/11
+• ### 🪟 WINDOWS 10/11
 
 #### 📌 1. Clona la repository
 
@@ -62,7 +62,7 @@ Spostati nella main directory da terminale ed esegui:
 python run.py
 ```
 
-### 🍎 MAC OS
+• ### 🍎 MAC OS
 
 #### 📌 1. Dai i permessi di esecuzione allo script `setup_dcst.command` per installare le dipendenze (da Terminale) con:
 

@@ -1,9 +1,0 @@
-networkx>=3.4.2
-matplotlib>=3.10.0
-pandas>=2.2.3
-tabulate>=0.9.0
-numpy>=2.2.4
-tqdm>=4.67.1
-Pillow>=11.1.0
-memory-profiler>=0.61.0
-psutil>=7.0.0

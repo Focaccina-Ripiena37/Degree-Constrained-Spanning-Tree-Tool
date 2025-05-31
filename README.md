@@ -50,7 +50,7 @@ O scarica la repo da questa pagina come .zip
 
 Esegui il file `install_dependencies.cmd` come **Amministratore**
 
-#### 📌 4. Avvia l’app
+#### 📌 3. Avvia l’app
 
 Doppio clic sul file `play.vbs` 
 
@@ -64,13 +64,21 @@ python run.py
 
 ### 🍎 MAC OS
 
-#### 📌 1. Dai i permessi di esecuzione allo script `setup_dcst.command` (da Terminale) con:
+#### 📌 1. Dai i permessi di esecuzione allo script `setup_dcst.command` per installare le dipendenze (da Terminale) con:
 
 ```bash
 chmod +x setup_dcst.command
 ```
 
 #### 📌 2. Fai doppio clic oppure esegui dal Finder o da Terminale il file `setup_dcst.command`
+
+#### 📌 3. Avvia l’app
+
+Spostati dentro la directory di progetto da terminale ed esegui
+
+```bash
+python3 run.py
+```
 
 ---
 

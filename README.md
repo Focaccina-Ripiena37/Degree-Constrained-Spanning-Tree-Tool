@@ -66,7 +66,9 @@ python run.py
 
 #### 📌 1. Dai i permessi di esecuzione allo script `setup_dcst.command` (da Terminale) con:
 
-`chmod +x setup_dcst.command`
+```bash
+chmod +x setup_dcst.command
+```
 
 #### 📌 2. Fai doppio clic oppure esegui dal Finder o da Terminale il file `setup_dcst.command`
 

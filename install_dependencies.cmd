@@ -29,7 +29,7 @@ python -m pip install --upgrade pip
 
 REM 4. Installa le dipendenze globalmente
 echo Installazione dipendenze...
-pip install pandas tqdm tabulate numpy matplotlib networkx psutil pillow memory_profiler scipy
+pip install pandas tqdm tabulate numpy matplotlib networkx psutil pillow memory_profiler scipy tkinterdnd2
 
 echo ================================
 echo Tutto pronto!

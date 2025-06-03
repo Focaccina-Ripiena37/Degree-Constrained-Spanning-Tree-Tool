@@ -28,7 +28,8 @@ Il programma dispone di una semplice interfaccia grafica (GUI) realizzata in Tki
 Le altre funzionalitá base sono:
 - Esportazione automatica di file su desktop
 
-![{57C41493-5476-4193-B4F1-EE081BEBEB64}](https://github.com/user-attachments/assets/73cfe7c7-4975-46f8-8d5d-e35f7aaecd3f)
+![{68EB0C47-F353-4FED-8AB2-575C1C201DF3}](https://github.com/user-attachments/assets/e46a7cd6-3724-4e88-8ff8-cd2c525b2a8d)
+
 
 ---
 

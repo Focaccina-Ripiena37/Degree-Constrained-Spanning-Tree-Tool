@@ -1,0 +1,6197 @@
+# app/algorithms.py - Main algorithms for the DCST application
+
+#==============================================================================
+#                           1. IMPORTS
+#==============================================================================
+
+# Standard library imports
+import gc
+import os
+import sys
+import math
+import time
+import heapq
+import random
+import logging
+import threading
+import traceback
+import warnings
+from typing import Dict, Any, Optional, Tuple, List
+from threading import Lock, RLock, Event
+from collections import defaultdict
+from contextlib import contextmanager
+
+# Third-party imports
+import psutil
+import numpy as np
+import networkx as nx
+import concurrent.futures
+import multiprocessing
+from functools import partial
+
+# Local imports for configuration
+from .config import (
+    # Adaptive scaling constants
+    MAX_WORKERS_CONSERVATIVE, MAX_WORKERS_FALLBACK, MIN_CORES_FOR_OS,
+    WORKSTATION_MIN_CORES, WORKSTATION_MIN_RAM, DESKTOP_MIN_CORES, DESKTOP_MIN_RAM,
+    WORKSTATION_SAFETY_MARGIN, DESKTOP_SAFETY_MARGIN, LAPTOP_SAFETY_MARGIN,
+    WORKSTATION_RAM_EFFICIENCY, DESKTOP_RAM_EFFICIENCY, LAPTOP_RAM_EFFICIENCY,
+    ENABLE_ADAPTIVE_SCALING, ADAPTIVE_SCALING_MIN_CORES, ADAPTIVE_SCALING_MIN_RAM,
+    ENV_FORCE_CONSERVATIVE_MODE, ENV_MAX_WORKERS_OVERRIDE, ENV_SAFETY_MARGIN_OVERRIDE,
+    # Other constants
+    DEFAULT_SAFETY_MARGIN, MIN_RAM_PER_WORKER, CPU_CHECK_INTERVAL,
+    MIN_MEMORY_GB, LOW_MEMORY_GB, LIMITED_MEMORY_GB,
+    DEFAULT_PENALTY, DEFAULT_MAX_CHILDREN,
+    ENV_OMP_THREADS, ENV_MKL_THREADS, ENV_NUMEXPR_THREADS, ENV_OPENBLAS_THREADS,
+    DEFAULT_PLOT_DIR_NAME, FALLBACK_PLOT_PREFIX, MAX_PLOT_DIRECTORIES,
+    LARGE_GRAPH_THRESHOLD, LS_MAX_ITERATIONS, SA_INITIAL_TEMPERATURE,
+    SA_COOLING_RATE, SA_MIN_TEMPERATURE, SA_LARGE_INSTANCE_MIN_TEMP,
+    SA_LARGE_INSTANCE_COOLING, PARALLEL_COST_EVAL_TIMEOUT_PER_CANDIDATE,
+    PARALLEL_COST_EVAL_TIMEOUT_MAX, INDIVIDUAL_TASK_TIMEOUT,
+    EMERGENCY_CLEANUP_CPU_THRESHOLD
+)
+
+# Memory profiling for precise memory measurement
+try:
+    from memory_profiler import memory_usage
+    MEMORY_PROFILER_AVAILABLE = True
+    logging.info("memory_profiler available for precise memory measurement")
+except ImportError:
+    MEMORY_PROFILER_AVAILABLE = False
+    logging.warning("memory_profiler not available, falling back to psutil for memory measurement")
+
+# All operations use CPU-only optimizations for maximum stability
+
+#==============================================================================
+#                           2. DEPENDENCY VERIFICATION SYSTEM
+#==============================================================================
+
+class DependencyVerificationError(Exception):
+    """Custom exception for dependency verification failures."""
+    pass
+
+class DependencyVerifier:
+    """
+    Comprehensive dependency verification system that validates all required libraries
+    are available and compatible at startup.
+    """
+
+    def __init__(self):
+        self.verification_results = {}
+        self.critical_dependencies = {
+            'numpy': {'min_version': '1.19.0', 'required': True},
+            'scipy': {'min_version': '1.5.0', 'required': False},
+            'networkx': {'min_version': '2.5', 'required': True},
+            'psutil': {'min_version': '5.7.0', 'required': True},
+            'memory_profiler': {'min_version': '0.57.0', 'required': False}
+        }
+
+    def verify_all_dependencies(self) -> Tuple[bool, List[str]]:
+        """
+        Verify all dependencies and return status with detailed messages.
+
+        Returns:
+            Tuple[bool, List[str]]: (success, error_messages)
+        """
+        errors = []
+        all_good = True
+
+        for dep_name, dep_info in self.critical_dependencies.items():
+            try:
+                success, message = self._verify_single_dependency(dep_name, dep_info)
+                self.verification_results[dep_name] = {'success': success, 'message': message}
+
+                if not success:
+                    if dep_info['required']:
+                        all_good = False
+                        errors.append(f"CRITICAL: {message}")
+                    else:
+                        errors.append(f"WARNING: {message}")
+
+            except Exception as e:
+                error_msg = f"Failed to verify {dep_name}: {str(e)}"
+                self.verification_results[dep_name] = {'success': False, 'message': error_msg}
+                if dep_info['required']:
+                    all_good = False
+                    errors.append(f"CRITICAL: {error_msg}")
+                else:
+                    errors.append(f"WARNING: {error_msg}")
+
+        # Additional system checks
+        system_checks = self._verify_system_requirements()
+        if not system_checks[0]:
+            errors.extend(system_checks[1])
+            all_good = False
+
+        return all_good, errors
+
+    def _verify_single_dependency(self, dep_name: str, dep_info: Dict) -> Tuple[bool, str]:
+        """Verify a single dependency."""
+        try:
+            if dep_name == 'numpy':
+                import numpy as np
+                version = np.__version__
+                if self._version_compare(version, dep_info['min_version']) >= 0:
+                    return True, f"NumPy {version} - OK"
+                else:
+                    return False, f"NumPy {version} is too old (minimum: {dep_info['min_version']})"
+
+            elif dep_name == 'scipy':
+                import scipy
+                version = scipy.__version__
+                if self._version_compare(version, dep_info['min_version']) >= 0:
+                    return True, f"SciPy {version} - OK"
+                else:
+                    return False, f"SciPy {version} is too old (minimum: {dep_info['min_version']})"
+
+            elif dep_name == 'networkx':
+                import networkx as nx
+                version = nx.__version__
+                if self._version_compare(version, dep_info['min_version']) >= 0:
+                    return True, f"NetworkX {version} - OK"
+                else:
+                    return False, f"NetworkX {version} is too old (minimum: {dep_info['min_version']})"
+
+            elif dep_name == 'psutil':
+                import psutil
+                version = psutil.__version__
+                if self._version_compare(version, dep_info['min_version']) >= 0:
+                    return True, f"psutil {version} - OK"
+                else:
+                    return False, f"psutil {version} is too old (minimum: {dep_info['min_version']})"
+
+            elif dep_name == 'memory_profiler':
+                try:
+                    import memory_profiler
+                    version = getattr(memory_profiler, '__version__', 'unknown')
+                    return True, f"memory_profiler {version} - OK (optional)"
+                except ImportError:
+                    return False, "memory_profiler not available (optional - will use psutil fallback)"
+
+        except ImportError:
+            return False, f"{dep_name} is not installed"
+        except Exception as e:
+            return False, f"{dep_name} verification failed: {str(e)}"
+
+        return False, f"Unknown dependency: {dep_name}"
+
+    def _version_compare(self, version1: str, version2: str) -> int:
+        """Compare two version strings. Returns: -1 if v1 < v2, 0 if equal, 1 if v1 > v2"""
+        try:
+            v1_parts = [int(x) for x in version1.split('.')]
+            v2_parts = [int(x) for x in version2.split('.')]
+
+            # Pad shorter version with zeros
+            max_len = max(len(v1_parts), len(v2_parts))
+            v1_parts.extend([0] * (max_len - len(v1_parts)))
+            v2_parts.extend([0] * (max_len - len(v2_parts)))
+
+            for v1, v2 in zip(v1_parts, v2_parts):
+                if v1 < v2:
+                    return -1
+                elif v1 > v2:
+                    return 1
+            return 0
+        except:
+            return 0  # If comparison fails, assume equal
+
+    def _verify_system_requirements(self) -> Tuple[bool, List[str]]:
+        """Verify system requirements."""
+        errors = []
+
+        try:
+            # Check Python version
+            if sys.version_info < (3, 7):
+                errors.append("Python 3.7 or higher is required")
+
+            # Check available memory
+            memory = psutil.virtual_memory()
+            available_gb = memory.available / (1024**3)
+            if available_gb < 1.0:
+                errors.append(f"Very low available memory: {available_gb:.1f}GB (minimum recommended: 2GB)")
+            elif available_gb < 2.0:
+                errors.append(f"Low available memory: {available_gb:.1f}GB (recommended: 4GB+)")
+
+            # Check CPU cores
+            cpu_cores = psutil.cpu_count(logical=True)
+            if cpu_cores < 2:
+                errors.append(f"Very few CPU cores: {cpu_cores} (minimum recommended: 2)")
+
+        except Exception as e:
+            errors.append(f"System requirements check failed: {str(e)}")
+
+        return len(errors) == 0, errors
+
+    def get_verification_summary(self) -> str:
+        """Get a formatted summary of verification results."""
+        summary = ["=== Dependency Verification Summary ==="]
+
+        for dep_name, result in self.verification_results.items():
+            status = "✓" if result['success'] else "✗"
+            summary.append(f"{status} {dep_name}: {result['message']}")
+
+        return "\n".join(summary)
+
+# Global dependency verifier instance
+_dependency_verifier = None
+
+def verify_dependencies_at_startup() -> bool:
+    """
+    Verify all dependencies at application startup.
+
+    Returns:
+        bool: True if all critical dependencies are satisfied
+
+    Raises:
+        DependencyVerificationError: If critical dependencies are missing
+    """
+    global _dependency_verifier
+
+    if _dependency_verifier is None:
+        _dependency_verifier = DependencyVerifier()
+
+    success, errors = _dependency_verifier.verify_all_dependencies()
+
+    # Log verification results
+    summary = _dependency_verifier.get_verification_summary()
+    logging.info(f"Dependency verification completed:\n{summary}")
+
+    if errors:
+        for error in errors:
+            if error.startswith("CRITICAL"):
+                logging.error(error)
+            else:
+                logging.warning(error)
+
+    if not success:
+        critical_errors = [e for e in errors if e.startswith("CRITICAL")]
+        if critical_errors:
+            error_msg = "Critical dependencies missing or incompatible:\n" + "\n".join(critical_errors)
+            error_msg += "\n\nSuggested fixes:"
+            error_msg += "\n- pip install --upgrade numpy scipy networkx psutil"
+            error_msg += "\n- pip install memory_profiler (optional)"
+            raise DependencyVerificationError(error_msg)
+
+    return success
+
+#==============================================================================
+#                           3. GLOBAL VARIABLE DEFINITIONS
+#==============================================================================
+greedy_cost_calls = [0]
+local_search_cost_calls = [0]
+sa_cost_calls = [0]
+
+# Global resource management variables with thread safety
+_last_cpu_check = 0
+_cpu_check_interval = 3.0  # OPTIMIZATION: Increased from CPU_CHECK_INTERVAL to reduce monitoring overhead
+_current_worker_count = None
+_resource_safety_margin = DEFAULT_SAFETY_MARGIN
+
+#==============================================================================
+#                           4. THREAD SAFETY ENHANCEMENTS
+#==============================================================================
+
+class ThreadSafeCounter:
+    """Thread-safe counter for algorithm call tracking."""
+
+    def __init__(self, initial_value=0):
+        self._value = initial_value
+        self._lock = Lock()
+
+    def increment(self):
+        with self._lock:
+            self._value += 1
+            return self._value
+
+    def get(self):
+        with self._lock:
+            return self._value
+
+    def reset(self):
+        with self._lock:
+            self._value = 0
+
+class ThreadSafeResourceManager:
+    """
+    Thread-safe resource manager for parallel operations.
+    Manages shared resources and ensures atomic operations.
+    """
+
+    def __init__(self):
+        self._resource_lock = RLock()  # Reentrant lock for nested calls
+        self._worker_count_lock = Lock()
+        self._memory_stats_lock = Lock()
+        self._performance_data_lock = Lock()
+
+        # Thread-safe data structures
+        self._active_operations = defaultdict(int)
+        self._resource_usage_history = []
+        self._performance_metrics = {}
+
+        # Resource monitoring
+        self._last_cpu_check = 0
+        self._last_memory_check = 0
+        self._check_interval = 1.0
+
+    @contextmanager
+    def resource_operation(self, operation_type: str):
+        """Context manager for thread-safe resource operations."""
+        with self._resource_lock:
+            self._active_operations[operation_type] += 1
+            operation_id = f"{operation_type}_{threading.current_thread().ident}_{time.time()}"
+
+        try:
+            yield operation_id
+        finally:
+            with self._resource_lock:
+                self._active_operations[operation_type] -= 1
+                if self._active_operations[operation_type] <= 0:
+                    del self._active_operations[operation_type]
+
+    def get_active_operations(self) -> Dict[str, int]:
+        """Get current active operations count."""
+        with self._resource_lock:
+            return dict(self._active_operations)
+
+    def update_worker_count(self, count: int) -> None:
+        """Thread-safe worker count update."""
+        with self._worker_count_lock:
+            global _current_worker_count
+            _current_worker_count = count
+
+    def get_worker_count(self) -> Optional[int]:
+        """Thread-safe worker count retrieval."""
+        with self._worker_count_lock:
+            return _current_worker_count
+
+    def record_performance_metric(self, operation: str, metric_name: str, value: float) -> None:
+        """Thread-safe performance metric recording."""
+        with self._performance_data_lock:
+            if operation not in self._performance_metrics:
+                self._performance_metrics[operation] = {}
+            if metric_name not in self._performance_metrics[operation]:
+                self._performance_metrics[operation][metric_name] = []
+
+            self._performance_metrics[operation][metric_name].append({
+                'value': value,
+                'timestamp': time.time(),
+                'thread_id': threading.current_thread().ident
+            })
+
+            # Keep only recent metrics (last 100 entries per metric)
+            if len(self._performance_metrics[operation][metric_name]) > 100:
+                self._performance_metrics[operation][metric_name] = \
+                    self._performance_metrics[operation][metric_name][-100:]
+
+    def get_performance_metrics(self, operation: str = None) -> Dict:
+        """Thread-safe performance metrics retrieval."""
+        with self._performance_data_lock:
+            if operation:
+                return self._performance_metrics.get(operation, {}).copy()
+            return {k: v.copy() for k, v in self._performance_metrics.items()}
+
+    def safe_memory_check(self) -> Dict[str, float]:
+        """Thread-safe memory usage check with throttling."""
+        current_time = time.time()
+
+        with self._memory_stats_lock:
+            if current_time - self._last_memory_check < self._check_interval:
+                # Return cached result if checked recently
+                if hasattr(self, '_cached_memory_stats'):
+                    return self._cached_memory_stats
+
+            try:
+                memory = psutil.virtual_memory()
+                process = psutil.Process()
+                process_memory = process.memory_info()
+
+                stats = {
+                    'system_total_gb': memory.total / (1024**3),
+                    'system_available_gb': memory.available / (1024**3),
+                    'system_used_percent': memory.percent,
+                    'process_rss_mb': process_memory.rss / (1024**2),
+                    'process_vms_mb': process_memory.vms / (1024**2),
+                    'timestamp': current_time
+                }
+
+                self._cached_memory_stats = stats
+                self._last_memory_check = current_time
+                return stats
+
+            except Exception as e:
+                logging.warning(f"Thread-safe memory check failed: {e}")
+                return {'error': str(e), 'timestamp': current_time}
+
+class ThreadSafeGraphProcessor:
+    """
+    Thread-safe graph processing utilities for parallel operations.
+    Ensures graph state consistency across multiple threads.
+    """
+
+    def __init__(self):
+        self._graph_locks = {}  # Per-graph locks
+        self._global_lock = Lock()
+
+    def get_graph_lock(self, graph_id: str) -> Lock:
+        """Get or create a lock for a specific graph."""
+        with self._global_lock:
+            if graph_id not in self._graph_locks:
+                self._graph_locks[graph_id] = Lock()
+            return self._graph_locks[graph_id]
+
+    @contextmanager
+    def safe_graph_operation(self, graph_id: str):
+        """Context manager for thread-safe graph operations."""
+        graph_lock = self.get_graph_lock(graph_id)
+        with graph_lock:
+            yield
+
+    def safe_graph_copy(self, graph, graph_id: str = None):
+        """Thread-safe graph copying."""
+        if graph_id is None:
+            graph_id = f"graph_{id(graph)}"
+
+        with self.safe_graph_operation(graph_id):
+            try:
+                return graph.copy()
+            except Exception as e:
+                logging.warning(f"Thread-safe graph copy failed: {e}")
+                # Fallback: create new graph and copy nodes/edges manually
+                import networkx as nx
+                new_graph = nx.Graph()
+                new_graph.add_nodes_from(graph.nodes(data=True))
+                new_graph.add_edges_from(graph.edges(data=True))
+                return new_graph
+
+# Global thread-safe instances
+_thread_safe_resource_manager = ThreadSafeResourceManager()
+_thread_safe_graph_processor = ThreadSafeGraphProcessor()
+
+# Thread-safe counters for algorithm calls
+_thread_safe_greedy_calls = ThreadSafeCounter()
+_thread_safe_local_calls = ThreadSafeCounter()
+_thread_safe_sa_calls = ThreadSafeCounter()
+
+def get_thread_safe_resource_manager() -> ThreadSafeResourceManager:
+    """Get the global thread-safe resource manager."""
+    return _thread_safe_resource_manager
+
+def get_thread_safe_graph_processor() -> ThreadSafeGraphProcessor:
+    """Get the global thread-safe graph processor."""
+    return _thread_safe_graph_processor
+
+#==============================================================================
+#                           5. ROBUST ERROR HANDLING WITH FALLBACK STRATEGIES
+#==============================================================================
+
+class AlgorithmError(Exception):
+    """Base exception for algorithm-related errors."""
+    pass
+
+class MemoryPressureError(AlgorithmError):
+    """Exception raised when memory pressure is detected."""
+    pass
+
+class ParallelProcessingError(AlgorithmError):
+    """Exception raised when parallel processing fails."""
+    pass
+
+class GraphIntegrityError(AlgorithmError):
+    """Exception raised when graph integrity is compromised."""
+    pass
+
+class RobustErrorHandler:
+    """
+    Comprehensive error handling system with specific recovery strategies
+    for different error types and graceful degradation capabilities.
+    """
+
+    def __init__(self):
+        self.error_history = []
+        self.recovery_strategies = {
+            'memory_pressure': self._handle_memory_pressure,
+            'parallel_failure': self._handle_parallel_failure,
+            'graph_integrity': self._handle_graph_integrity,
+            'timeout': self._handle_timeout,
+            'dependency_missing': self._handle_dependency_missing,
+            'system_instability': self._handle_system_instability
+        }
+        self.retry_counts = defaultdict(int)
+        self.max_retries = 3
+        self.exponential_backoff_base = 1.0
+
+    def handle_error_with_recovery(self, error: Exception, operation_context: Dict[str, Any]) -> Any:
+        """
+        Handle errors with appropriate recovery strategies.
+
+        Args:
+            error: The exception that occurred
+            operation_context: Context information about the operation
+
+        Returns:
+            Recovery result or raises if recovery fails
+        """
+        error_type = self._classify_error(error)
+        operation_id = operation_context.get('operation_id', 'unknown')
+
+        # Record error for analysis
+        self._record_error(error, error_type, operation_context)
+
+        # Check retry limits
+        if self.retry_counts[operation_id] >= self.max_retries:
+            logging.error(f"Maximum retries ({self.max_retries}) exceeded for operation {operation_id}")
+            raise error
+
+        # Apply exponential backoff
+        backoff_time = self.exponential_backoff_base * (2 ** self.retry_counts[operation_id])
+        if backoff_time > 0.1:  # Only sleep if significant
+            time.sleep(min(backoff_time, 5.0))  # Cap at 5 seconds
+
+        self.retry_counts[operation_id] += 1
+
+        # Apply recovery strategy
+        if error_type in self.recovery_strategies:
+            try:
+                return self.recovery_strategies[error_type](error, operation_context)
+            except Exception as recovery_error:
+                logging.error(f"Recovery strategy failed for {error_type}: {recovery_error}")
+                # Try fallback to sequential processing
+                return self._fallback_to_sequential(operation_context)
+        else:
+            # Unknown error type - try generic recovery
+            return self._generic_recovery(error, operation_context)
+
+    def _classify_error(self, error: Exception) -> str:
+        """Classify error type for appropriate recovery strategy."""
+        error_str = str(error).lower()
+        error_type_name = type(error).__name__.lower()
+
+        if isinstance(error, MemoryError) or 'memory' in error_str or 'out of memory' in error_str:
+            return 'memory_pressure'
+        elif isinstance(error, (concurrent.futures.TimeoutError, TimeoutError)) or 'timeout' in error_str:
+            return 'timeout'
+        elif isinstance(error, (concurrent.futures.ProcessPoolExecutor, multiprocessing.ProcessError)) or 'process' in error_str:
+            return 'parallel_failure'
+        elif isinstance(error, ImportError) or 'import' in error_str or 'module' in error_str:
+            return 'dependency_missing'
+        elif 'graph' in error_str or 'networkx' in error_str or isinstance(error, GraphIntegrityError):
+            return 'graph_integrity'
+        elif 'cpu' in error_str or 'system' in error_str or 'resource' in error_str:
+            return 'system_instability'
+        else:
+            return 'unknown'
+
+    def _record_error(self, error: Exception, error_type: str, context: Dict[str, Any]) -> None:
+        """Record error for analysis and pattern detection."""
+        error_record = {
+            'timestamp': time.time(),
+            'error_type': error_type,
+            'error_class': type(error).__name__,
+            'error_message': str(error),
+            'context': context.copy(),
+            'traceback': traceback.format_exc()
+        }
+
+        self.error_history.append(error_record)
+
+        # Keep only recent errors (last 100)
+        if len(self.error_history) > 100:
+            self.error_history = self.error_history[-100:]
+
+        logging.warning(f"Error recorded: {error_type} - {str(error)}")
+
+    def _handle_memory_pressure(self, error: Exception, context: Dict[str, Any]) -> Any:
+        """Handle memory pressure errors."""
+        logging.warning("Handling memory pressure - triggering aggressive cleanup")
+
+        # Trigger aggressive memory cleanup
+        cleanup_stats = proactive_memory_cleanup(force_aggressive=True)
+
+        # Reduce parallelization
+        if 'max_workers' in context:
+            context['max_workers'] = 1
+            logging.info("Reduced to single worker due to memory pressure")
+
+        # Switch to memory-efficient algorithms
+        if 'algorithm' in context:
+            context['use_memory_efficient'] = True
+            context['use_vectorization'] = False
+            logging.info("Switched to memory-efficient algorithms")
+
+        # Retry the operation with modified context
+        return self._retry_operation_with_context(context)
+
+    def _handle_parallel_failure(self, error: Exception, context: Dict[str, Any]) -> Any:
+        """Handle parallel processing failures."""
+        logging.warning("Handling parallel processing failure - falling back to sequential")
+
+        # Force sequential processing
+        context['max_workers'] = 1
+        context['use_parallel'] = False
+
+        # Retry with sequential processing
+        return self._retry_operation_with_context(context)
+
+    def _handle_graph_integrity(self, error: Exception, context: Dict[str, Any]) -> Any:
+        """Handle graph integrity errors."""
+        logging.warning("Handling graph integrity error - validating and repairing graph")
+
+        # Try to validate and repair the graph
+        if 'graph' in context:
+            try:
+                graph = context['graph']
+                # Basic validation
+                if not nx.is_connected(graph):
+                    logging.error("Graph is not connected - cannot proceed")
+                    raise GraphIntegrityError("Graph connectivity lost")
+
+                # Check for self-loops and multi-edges
+                if graph.number_of_selfloops() > 0:
+                    graph.remove_edges_from(nx.selfloop_edges(graph))
+                    logging.info("Removed self-loops from graph")
+
+                context['graph'] = graph
+
+            except Exception as repair_error:
+                logging.error(f"Graph repair failed: {repair_error}")
+                raise GraphIntegrityError("Cannot repair graph integrity")
+
+        return self._retry_operation_with_context(context)
+
+    def _handle_timeout(self, error: Exception, context: Dict[str, Any]) -> Any:
+        """Handle timeout errors."""
+        logging.warning("Handling timeout - reducing problem complexity")
+
+        # Increase timeout for retry
+        if 'timeout' in context:
+            context['timeout'] = min(context['timeout'] * 1.5, 1800)  # Cap at 30 minutes
+
+        # Reduce algorithm complexity
+        if 'max_iterations' in context:
+            context['max_iterations'] = max(100, context['max_iterations'] // 2)
+
+        # Reduce parallelization
+        if 'max_workers' in context and context['max_workers'] > 1:
+            context['max_workers'] = max(1, context['max_workers'] // 2)
+
+        return self._retry_operation_with_context(context)
+
+    def _handle_dependency_missing(self, error: Exception, context: Dict[str, Any]) -> Any:
+        """Handle missing dependency errors."""
+        logging.warning("Handling missing dependency - switching to fallback implementation")
+
+        # Disable features that require missing dependencies
+        context['use_vectorization'] = False
+        context['use_scipy'] = False
+        context['use_memory_profiler'] = False
+
+        # Force basic implementations
+        context['force_basic_algorithms'] = True
+
+        return self._retry_operation_with_context(context)
+
+    def _handle_system_instability(self, error: Exception, context: Dict[str, Any]) -> Any:
+        """Handle system instability errors."""
+        logging.warning("Handling system instability - switching to conservative mode")
+
+        # Switch to most conservative settings
+        context['max_workers'] = 1
+        context['use_parallel'] = False
+        context['safety_margin'] = 0.3  # Very conservative
+        context['force_conservative'] = True
+
+        # Trigger system cleanup
+        emergency_resource_cleanup()
+
+        return self._retry_operation_with_context(context)
+
+    def _generic_recovery(self, error: Exception, context: Dict[str, Any]) -> Any:
+        """Generic recovery strategy for unknown errors."""
+        logging.warning(f"Applying generic recovery for unknown error: {type(error).__name__}")
+
+        # Apply conservative settings
+        context['max_workers'] = 1
+        context['use_parallel'] = False
+        context['use_vectorization'] = False
+        context['safety_margin'] = 0.5
+
+        return self._retry_operation_with_context(context)
+
+    def _fallback_to_sequential(self, context: Dict[str, Any]) -> Any:
+        """Ultimate fallback to sequential processing."""
+        logging.info("Applying ultimate fallback to sequential processing")
+
+        # Most conservative settings possible
+        context.update({
+            'max_workers': 1,
+            'use_parallel': False,
+            'use_vectorization': False,
+            'use_memory_efficient': True,
+            'force_sequential': True,
+            'safety_margin': 0.3
+        })
+
+        return self._retry_operation_with_context(context)
+
+    def _retry_operation_with_context(self, context: Dict[str, Any]) -> Any:
+        """Retry the operation with modified context."""
+        operation_func = context.get('operation_func')
+        operation_args = context.get('operation_args', ())
+        operation_kwargs = context.get('operation_kwargs', {})
+
+        if operation_func is None:
+            raise AlgorithmError("No operation function provided for retry")
+
+        # Update kwargs with modified context
+        operation_kwargs.update({k: v for k, v in context.items()
+                               if k not in ['operation_func', 'operation_args', 'operation_kwargs', 'operation_id']})
+
+        try:
+            return operation_func(*operation_args, **operation_kwargs)
+        except Exception as retry_error:
+            logging.error(f"Retry failed: {retry_error}")
+            raise retry_error
+
+    def get_error_statistics(self) -> Dict[str, Any]:
+        """Get error statistics for monitoring."""
+        if not self.error_history:
+            return {'total_errors': 0}
+
+        error_types = defaultdict(int)
+        recent_errors = 0
+        current_time = time.time()
+
+        for error_record in self.error_history:
+            error_types[error_record['error_type']] += 1
+            if current_time - error_record['timestamp'] < 3600:  # Last hour
+                recent_errors += 1
+
+        return {
+            'total_errors': len(self.error_history),
+            'recent_errors_1h': recent_errors,
+            'error_types': dict(error_types),
+            'most_common_error': max(error_types.items(), key=lambda x: x[1])[0] if error_types else None
+        }
+
+# Global error handler instance
+_robust_error_handler = RobustErrorHandler()
+
+def get_robust_error_handler() -> RobustErrorHandler:
+    """Get the global robust error handler."""
+    return _robust_error_handler
+
+#==============================================================================
+#                           6. RUNTIME CONSISTENCY TESTING
+#==============================================================================
+
+class ConsistencyTestError(Exception):
+    """Exception raised when consistency tests fail."""
+    pass
+
+class RuntimeConsistencyTester:
+    """
+    Runtime consistency testing system that validates graph integrity
+    and mathematical consistency during algorithm execution.
+    """
+
+    def __init__(self):
+        self.test_history = []
+        self.failed_tests = []
+        self.test_intervals = {
+            'graph_integrity': 10,  # Every 10 operations
+            'cost_consistency': 5,   # Every 5 cost calculations
+            'memory_integrity': 20,  # Every 20 operations
+            'thread_safety': 15     # Every 15 parallel operations
+        }
+        self.operation_counts = defaultdict(int)
+        self.consistency_lock = Lock()
+
+    def should_run_test(self, test_type: str) -> bool:
+        """Determine if a consistency test should be run."""
+        with self.consistency_lock:
+            self.operation_counts[test_type] += 1
+            interval = self.test_intervals.get(test_type, 10)
+            return self.operation_counts[test_type] % interval == 0
+
+    def validate_graph_integrity(self, graph, operation_context: Dict[str, Any] = None) -> bool:
+        """
+        Validate graph integrity during algorithm execution.
+
+        Args:
+            graph: NetworkX graph to validate
+            operation_context: Context information about the current operation
+
+        Returns:
+            bool: True if graph passes all integrity tests
+
+        Raises:
+            ConsistencyTestError: If critical integrity violations are found
+        """
+        if not self.should_run_test('graph_integrity'):
+            return True
+
+        test_results = []
+        context = operation_context or {}
+
+        try:
+            # Test 1: Basic graph structure
+            if not isinstance(graph, nx.Graph):
+                test_results.append(('structure', False, "Not a valid NetworkX graph"))
+            else:
+                test_results.append(('structure', True, "Valid NetworkX graph"))
+
+            # Test 2: Connectivity
+            if graph.number_of_nodes() > 0:
+                is_connected = nx.is_connected(graph)
+                test_results.append(('connectivity', is_connected,
+                                   "Graph is connected" if is_connected else "Graph is disconnected"))
+
+                if not is_connected and context.get('require_connected', True):
+                    raise ConsistencyTestError("Graph connectivity lost during operation")
+
+            # Test 3: Tree properties (if expected to be a tree)
+            if context.get('should_be_tree', False):
+                is_tree = nx.is_tree(graph)
+                test_results.append(('tree_property', is_tree,
+                                   "Valid tree structure" if is_tree else "Not a valid tree"))
+
+                if not is_tree:
+                    # Additional diagnostics
+                    num_nodes = graph.number_of_nodes()
+                    num_edges = graph.number_of_edges()
+                    expected_edges = num_nodes - 1
+
+                    if num_edges != expected_edges:
+                        test_results.append(('edge_count', False,
+                                           f"Wrong edge count: {num_edges} (expected: {expected_edges})"))
+
+                    if not is_connected:
+                        test_results.append(('tree_connectivity', False, "Tree is not connected"))
+
+                    # Check for cycles
+                    try:
+                        cycles = list(nx.simple_cycles(graph.to_directed()))
+                        if cycles:
+                            test_results.append(('cycles', False, f"Found {len(cycles)} cycles"))
+                    except:
+                        pass  # Ignore cycle detection errors
+
+            # Test 4: Node and edge data integrity
+            node_data_valid = True
+            edge_data_valid = True
+
+            for node, data in graph.nodes(data=True):
+                if not isinstance(data, dict):
+                    node_data_valid = False
+                    break
+
+            for u, v, data in graph.edges(data=True):
+                if not isinstance(data, dict):
+                    edge_data_valid = False
+                    break
+                # Check for valid weight
+                if 'weight' in data:
+                    try:
+                        weight = float(data['weight'])
+                        if weight < 0 or not math.isfinite(weight):
+                            edge_data_valid = False
+                            break
+                    except (ValueError, TypeError):
+                        edge_data_valid = False
+                        break
+
+            test_results.append(('node_data', node_data_valid,
+                               "Node data valid" if node_data_valid else "Invalid node data"))
+            test_results.append(('edge_data', edge_data_valid,
+                               "Edge data valid" if edge_data_valid else "Invalid edge data"))
+
+            # Test 5: Self-loops and multi-edges
+            self_loops = list(nx.selfloop_edges(graph))
+            has_self_loops = len(self_loops) > 0
+            test_results.append(('self_loops', not has_self_loops,
+                               "No self-loops" if not has_self_loops else f"Found {len(self_loops)} self-loops"))
+
+            # Record test results
+            self._record_test_results('graph_integrity', test_results, context)
+
+            # Check for critical failures
+            critical_failures = [result for result in test_results
+                                if not result[1] and result[0] in ['structure', 'connectivity']]
+
+            if critical_failures and context.get('strict_validation', False):
+                failure_messages = [result[2] for result in critical_failures]
+                raise ConsistencyTestError(f"Critical graph integrity failures: {'; '.join(failure_messages)}")
+
+            # Return overall success
+            return all(result[1] for result in test_results)
+
+        except Exception as e:
+            if isinstance(e, ConsistencyTestError):
+                raise
+            else:
+                logging.warning(f"Graph integrity validation failed: {e}")
+                self._record_test_results('graph_integrity', [('validation_error', False, str(e))], context)
+                return False
+
+    def validate_cost_consistency(self, graph, calculated_cost: float,
+                                max_children: int, penalty: float,
+                                operation_context: Dict[str, Any] = None) -> bool:
+        """
+        Validate cost calculation consistency.
+
+        Args:
+            graph: Graph for which cost was calculated
+            calculated_cost: The calculated cost value
+            max_children: Maximum children constraint
+            penalty: Penalty value
+            operation_context: Context information
+
+        Returns:
+            bool: True if cost calculation is consistent
+        """
+        if not self.should_run_test('cost_consistency'):
+            return True
+
+        test_results = []
+        context = operation_context or {}
+
+        try:
+            # Test 1: Cost value validity
+            is_finite = math.isfinite(calculated_cost)
+            is_non_negative = calculated_cost >= 0
+
+            test_results.append(('cost_finite', is_finite,
+                               "Cost is finite" if is_finite else f"Cost is not finite: {calculated_cost}"))
+            test_results.append(('cost_non_negative', is_non_negative,
+                               "Cost is non-negative" if is_non_negative else f"Cost is negative: {calculated_cost}"))
+
+            # Test 2: Recalculate cost independently
+            try:
+                recalculated_cost = self._independent_cost_calculation(graph, max_children, penalty)
+                cost_difference = abs(calculated_cost - recalculated_cost)
+                tolerance = max(0.01, calculated_cost * 0.001)  # 0.1% tolerance or 0.01 minimum
+
+                costs_match = cost_difference <= tolerance
+                test_results.append(('cost_recalculation', costs_match,
+                                   f"Cost matches recalculation (diff: {cost_difference:.6f})" if costs_match
+                                   else f"Cost mismatch: {calculated_cost} vs {recalculated_cost} (diff: {cost_difference:.6f})"))
+
+                if not costs_match and context.get('strict_cost_validation', False):
+                    raise ConsistencyTestError(f"Cost calculation inconsistency: {calculated_cost} vs {recalculated_cost}")
+
+            except Exception as calc_error:
+                test_results.append(('cost_recalculation', False, f"Recalculation failed: {calc_error}"))
+
+            # Test 3: Constraint violation consistency
+            if max_children != float('inf'):
+                try:
+                    violation_count = self._count_constraint_violations(graph, max_children)
+                    expected_penalty_cost = violation_count * penalty
+
+                    # Extract base cost (without penalties)
+                    base_cost = sum(data.get('weight', 1) for _, _, data in graph.edges(data=True))
+                    expected_total_cost = base_cost + expected_penalty_cost
+
+                    penalty_consistent = abs(calculated_cost - expected_total_cost) <= tolerance
+                    test_results.append(('penalty_consistency', penalty_consistent,
+                                       f"Penalty calculation consistent" if penalty_consistent
+                                       else f"Penalty inconsistent: expected {expected_total_cost}, got {calculated_cost}"))
+
+                except Exception as penalty_error:
+                    test_results.append(('penalty_consistency', False, f"Penalty validation failed: {penalty_error}"))
+
+            # Record test results
+            self._record_test_results('cost_consistency', test_results, context)
+
+            # Check for critical failures
+            critical_failures = [result for result in test_results
+                                if not result[1] and result[0] in ['cost_finite', 'cost_non_negative']]
+
+            if critical_failures:
+                failure_messages = [result[2] for result in critical_failures]
+                raise ConsistencyTestError(f"Critical cost consistency failures: {'; '.join(failure_messages)}")
+
+            return all(result[1] for result in test_results)
+
+        except Exception as e:
+            if isinstance(e, ConsistencyTestError):
+                raise
+            else:
+                logging.warning(f"Cost consistency validation failed: {e}")
+                self._record_test_results('cost_consistency', [('validation_error', False, str(e))], context)
+                return False
+
+    def validate_memory_integrity(self, operation_context: Dict[str, Any] = None) -> bool:
+        """
+        Validate memory integrity during algorithm execution.
+
+        Args:
+            operation_context: Context information about the current operation
+
+        Returns:
+            bool: True if memory state is consistent
+        """
+        if not self.should_run_test('memory_integrity'):
+            return True
+
+        test_results = []
+        context = operation_context or {}
+
+        try:
+            # Test 1: Memory usage within reasonable bounds
+            memory_stats = monitor_memory_usage()
+
+            if 'error' not in memory_stats:
+                system_usage = memory_stats['system_used_percent']
+                process_rss = memory_stats['process_rss_mb']
+
+                reasonable_system_usage = system_usage < 95.0
+                reasonable_process_usage = process_rss < 2048  # 2GB limit for process
+
+                test_results.append(('system_memory', reasonable_system_usage,
+                                   f"System memory usage OK: {system_usage:.1f}%" if reasonable_system_usage
+                                   else f"High system memory usage: {system_usage:.1f}%"))
+
+                test_results.append(('process_memory', reasonable_process_usage,
+                                   f"Process memory usage OK: {process_rss:.1f}MB" if reasonable_process_usage
+                                   else f"High process memory usage: {process_rss:.1f}MB"))
+            else:
+                test_results.append(('memory_monitoring', False, f"Memory monitoring failed: {memory_stats['error']}"))
+
+            # Test 2: Garbage collection effectiveness
+            gc_before = len(gc.get_objects())
+            gc.collect()
+            gc_after = len(gc.get_objects())
+
+            objects_freed = gc_before - gc_after
+            gc_effective = objects_freed >= 0  # Should not increase
+
+            test_results.append(('garbage_collection', gc_effective,
+                               f"GC freed {objects_freed} objects" if gc_effective
+                               else f"GC issue: object count increased by {-objects_freed}"))
+
+            # Record test results
+            self._record_test_results('memory_integrity', test_results, context)
+
+            return all(result[1] for result in test_results)
+
+        except Exception as e:
+            logging.warning(f"Memory integrity validation failed: {e}")
+            self._record_test_results('memory_integrity', [('validation_error', False, str(e))], context)
+            return False
+
+    def _independent_cost_calculation(self, graph, max_children: int, penalty: float) -> float:
+        """Independent cost calculation for validation."""
+        try:
+            # Calculate base cost (sum of edge weights)
+            base_cost = 0.0
+            for _, _, data in graph.edges(data=True):
+                weight = data.get('weight', 1.0)
+                base_cost += float(weight)
+
+            # Calculate constraint violations
+            violation_cost = 0.0
+            if max_children != float('inf'):
+                violation_count = self._count_constraint_violations(graph, max_children)
+                violation_cost = violation_count * penalty
+
+            return base_cost + violation_cost
+
+        except Exception as e:
+            logging.warning(f"Independent cost calculation failed: {e}")
+            return float('inf')
+
+    def _count_constraint_violations(self, graph, max_children: int) -> int:
+        """Count constraint violations in the graph."""
+        violations = 0
+        degrees = dict(graph.degree())
+
+        for node in graph.nodes():
+            # Count children (nodes with lower degree connected to this node)
+            children_count = 0
+            node_degree = degrees[node]
+
+            for neighbor in graph.neighbors(node):
+                neighbor_degree = degrees[neighbor]
+                if neighbor_degree < node_degree:
+                    children_count += 1
+                elif neighbor_degree == node_degree and node < neighbor:
+                    # Tie-breaking rule for equal degrees
+                    children_count += 1
+
+            if children_count > max_children:
+                violations += children_count - max_children
+
+        return violations
+
+    def _record_test_results(self, test_type: str, results: List[Tuple], context: Dict[str, Any]) -> None:
+        """Record test results for analysis."""
+        test_record = {
+            'timestamp': time.time(),
+            'test_type': test_type,
+            'results': results,
+            'context': context.copy(),
+            'thread_id': threading.current_thread().ident,
+            'success': all(result[1] for result in results)
+        }
+
+        with self.consistency_lock:
+            self.test_history.append(test_record)
+
+            # Track failed tests separately
+            if not test_record['success']:
+                self.failed_tests.append(test_record)
+
+            # Keep only recent history (last 1000 tests)
+            if len(self.test_history) > 1000:
+                self.test_history = self.test_history[-1000:]
+
+            # Keep only recent failed tests (last 100)
+            if len(self.failed_tests) > 100:
+                self.failed_tests = self.failed_tests[-100:]
+
+    def get_test_statistics(self) -> Dict[str, Any]:
+        """Get comprehensive test statistics."""
+        with self.consistency_lock:
+            if not self.test_history:
+                return {'total_tests': 0}
+
+            total_tests = len(self.test_history)
+            failed_tests = len(self.failed_tests)
+            success_rate = (total_tests - failed_tests) / total_tests if total_tests > 0 else 0.0
+
+            # Count tests by type
+            test_type_counts = defaultdict(int)
+            test_type_failures = defaultdict(int)
+
+            for test_record in self.test_history:
+                test_type_counts[test_record['test_type']] += 1
+                if not test_record['success']:
+                    test_type_failures[test_record['test_type']] += 1
+
+            # Recent test performance (last hour)
+            current_time = time.time()
+            recent_tests = [t for t in self.test_history if current_time - t['timestamp'] < 3600]
+            recent_failures = [t for t in self.failed_tests if current_time - t['timestamp'] < 3600]
+
+            return {
+                'total_tests': total_tests,
+                'failed_tests': failed_tests,
+                'success_rate': success_rate,
+                'test_type_counts': dict(test_type_counts),
+                'test_type_failures': dict(test_type_failures),
+                'recent_tests_1h': len(recent_tests),
+                'recent_failures_1h': len(recent_failures),
+                'most_common_failure': max(test_type_failures.items(), key=lambda x: x[1])[0] if test_type_failures else None
+            }
+
+    def reset_test_history(self) -> None:
+        """Reset test history and statistics."""
+        with self.consistency_lock:
+            self.test_history.clear()
+            self.failed_tests.clear()
+            self.operation_counts.clear()
+            logging.info("Runtime consistency test history reset")
+
+# Global consistency tester instance
+_runtime_consistency_tester = RuntimeConsistencyTester()
+
+def get_runtime_consistency_tester() -> RuntimeConsistencyTester:
+    """Get the global runtime consistency tester."""
+    return _runtime_consistency_tester
+
+def validate_algorithm_state(graph, cost: float = None, max_children: int = None,
+                           penalty: float = None, operation_context: Dict[str, Any] = None) -> bool:
+    """
+    Convenience function to validate algorithm state during execution.
+
+    Args:
+        graph: Graph to validate
+        cost: Calculated cost (optional)
+        max_children: Maximum children constraint (optional)
+        penalty: Penalty value (optional)
+        operation_context: Context information (optional)
+
+    Returns:
+        bool: True if all validations pass
+    """
+    tester = get_runtime_consistency_tester()
+    context = operation_context or {}
+
+    try:
+        # Always validate graph integrity
+        graph_valid = tester.validate_graph_integrity(graph, context)
+
+        # Validate cost if provided
+        cost_valid = True
+        if cost is not None and max_children is not None and penalty is not None:
+            cost_valid = tester.validate_cost_consistency(graph, cost, max_children, penalty, context)
+
+        # Validate memory integrity
+        memory_valid = tester.validate_memory_integrity(context)
+
+        return graph_valid and cost_valid and memory_valid
+
+    except ConsistencyTestError as e:
+        logging.error(f"Consistency validation failed: {e}")
+        return False
+    except Exception as e:
+        logging.warning(f"Validation error: {e}")
+        return False
+
+#==============================================================================
+#                           7. ADVANCED ADAPTIVE MEMORY MANAGEMENT
+#==============================================================================
+
+class AdvancedMemoryManager:
+    """
+    Advanced adaptive memory management system that enhances existing
+    memory management with dynamic thresholds and predictive cleanup.
+    """
+
+    def __init__(self):
+        self.memory_history = []
+        self.cleanup_history = []
+        self.memory_lock = Lock()
+        self.prediction_window = 10  # Number of samples for prediction
+        self.dynamic_thresholds = {
+            'warning': 70.0,      # Warning threshold (%)
+            'critical': 85.0,     # Critical threshold (%)
+            'emergency': 95.0     # Emergency threshold (%)
+        }
+        self.adaptive_cleanup_intervals = {
+            'light': 50,          # Light cleanup every 50 operations
+            'moderate': 20,       # Moderate cleanup every 20 operations
+            'aggressive': 5       # Aggressive cleanup every 5 operations
+        }
+        self.operation_count = 0
+        self.last_cleanup_time = time.time()
+
+    def get_dynamic_memory_thresholds(self) -> Dict[str, float]:
+        """Calculate dynamic memory thresholds based on system state and history."""
+        try:
+            # Get current system state
+            cpu_cores, total_ram_gb, available_ram_gb = detect_system_resources()
+
+            # Adjust thresholds based on available RAM
+            if available_ram_gb < 2.0:
+                # Very low memory system - be more aggressive
+                return {
+                    'warning': 60.0,
+                    'critical': 75.0,
+                    'emergency': 90.0
+                }
+            elif available_ram_gb < 4.0:
+                # Low memory system - be moderately aggressive
+                return {
+                    'warning': 65.0,
+                    'critical': 80.0,
+                    'emergency': 92.0
+                }
+            elif available_ram_gb > 16.0:
+                # High memory system - be more relaxed
+                return {
+                    'warning': 80.0,
+                    'critical': 90.0,
+                    'emergency': 97.0
+                }
+            else:
+                # Standard system - use default thresholds
+                return self.dynamic_thresholds.copy()
+
+        except Exception as e:
+            logging.warning(f"Failed to calculate dynamic thresholds: {e}")
+            return self.dynamic_thresholds.copy()
+
+# Global advanced memory manager instance
+_advanced_memory_manager = AdvancedMemoryManager()
+
+def get_advanced_memory_manager() -> AdvancedMemoryManager:
+    """Get the global advanced memory manager."""
+    return _advanced_memory_manager
+
+#==============================================================================
+#                           9. SAFE EDGE WEIGHT ACCESS UTILITIES
+#==============================================================================
+
+def safe_get_edge_weight(G, u, v, default_weight=1):
+    """
+    Safely get edge weight from graph, handling missing edges and weights.
+
+    Args:
+        G: NetworkX graph
+        u, v: Edge endpoints
+        default_weight: Default weight if edge or weight doesn't exist
+
+    Returns:
+        float: Edge weight or default weight
+    """
+    try:
+        if G.has_edge(u, v):
+            edge_data = G[u][v]
+            if isinstance(edge_data, dict) and 'weight' in edge_data:
+                weight = edge_data['weight']
+                # Ensure weight is a valid number
+                if isinstance(weight, (int, float)) and weight > 0:
+                    return float(weight)
+                else:
+                    logging.debug(f"Invalid weight {weight} for edge ({u}, {v}), using default {default_weight}")
+                    return float(default_weight)
+            else:
+                logging.debug(f"No weight attribute for edge ({u}, {v}), using default {default_weight}")
+                return float(default_weight)
+        else:
+            logging.debug(f"Edge ({u}, {v}) does not exist, using default weight {default_weight}")
+            return float(default_weight)
+    except Exception as e:
+        logging.warning(f"Error accessing weight for edge ({u}, {v}): {e}. Using default {default_weight}")
+        return float(default_weight)
+
+def safe_add_edge_with_weight(G, u, v, source_graph=None, default_weight=1):
+    """
+    Safely add edge to graph with proper weight handling.
+
+    Args:
+        G: Target graph to add edge to
+        u, v: Edge endpoints
+        source_graph: Source graph to get weight from (optional)
+        default_weight: Default weight if no source or weight not found
+
+    Returns:
+        bool: True if edge was added successfully
+    """
+    try:
+        # Get weight from source graph if provided
+        if source_graph is not None:
+            weight = safe_get_edge_weight(source_graph, u, v, default_weight)
+        else:
+            weight = default_weight
+
+        # Add edge with weight
+        G.add_edge(u, v, weight=weight)
+        return True
+
+    except Exception as e:
+        logging.warning(f"Failed to add edge ({u}, {v}) with weight: {e}")
+        return False
+
+def validate_graph_weights(G, fix_missing=True, default_weight=1):
+    """
+    Validate and optionally fix missing or invalid edge weights in a graph.
+
+    Args:
+        G: NetworkX graph
+        fix_missing: Whether to add missing weights
+        default_weight: Default weight to use for missing weights
+
+    Returns:
+        tuple: (is_valid, num_fixed, errors)
+    """
+    is_valid = True
+    num_fixed = 0
+    errors = []
+
+    try:
+        for u, v, data in G.edges(data=True):
+            if 'weight' not in data or data['weight'] is None:
+                is_valid = False
+                errors.append(f"Edge ({u}, {v}) missing weight")
+
+                if fix_missing:
+                    G[u][v]['weight'] = default_weight
+                    num_fixed += 1
+            elif not isinstance(data['weight'], (int, float)) or data['weight'] <= 0:
+                is_valid = False
+                errors.append(f"Edge ({u}, {v}) has invalid weight: {data['weight']}")
+
+                if fix_missing:
+                    G[u][v]['weight'] = default_weight
+                    num_fixed += 1
+
+    except Exception as e:
+        logging.warning(f"Graph weight validation failed: {e}")
+        errors.append(f"Validation error: {e}")
+
+    return is_valid, num_fixed, errors
+
+def enhanced_parallel_local_search(G, initial_tree, max_degree, penalty, num_threads=None, stop_event=None, queue=None):
+    """
+    Enhanced parallel local search - wrapper around parallel_local_search for backward compatibility.
+
+    Args:
+        G: NetworkX graph
+        initial_tree: Initial spanning tree
+        max_degree: Maximum degree constraint
+        penalty: Penalty for violations
+        num_threads: Number of threads to use
+        stop_event: Event to signal stopping
+        queue: Queue for progress updates
+
+    Returns:
+        tuple: (best_tree, total_calls, history)
+    """
+    return parallel_local_search(G, initial_tree, max_degree, penalty, num_threads, stop_event, queue)
+
+#==============================================================================
+#                           8. CRITICAL IMPROVEMENTS INITIALIZATION
+#==============================================================================
+
+def initialize_critical_improvements() -> bool:
+    """
+    Initialize all critical improvements at application startup.
+
+    This function should be called at the beginning of the application
+    to ensure all systems are properly initialized and verified.
+
+    Returns:
+        bool: True if all systems initialized successfully
+    """
+    initialization_results = []
+
+    try:
+        # 1. Verify dependencies
+        logging.info("=== Initializing Critical Improvements ===")
+        logging.info("1. Verifying dependencies...")
+
+        try:
+            dependency_success = verify_dependencies_at_startup()
+            initialization_results.append(("dependency_verification", dependency_success))
+            if dependency_success:
+                logging.info("PASS Dependency verification completed successfully")
+            else:
+                logging.warning("WARN Dependency verification completed with warnings")
+        except DependencyVerificationError as e:
+            logging.error(f"FAIL Critical dependency verification failed: {e}")
+            initialization_results.append(("dependency_verification", False))
+            return False
+
+        # 2. Initialize thread-safe systems
+        logging.info("2. Initializing thread-safe systems...")
+        try:
+            resource_manager = get_thread_safe_resource_manager()
+            graph_processor = get_thread_safe_graph_processor()
+
+            # Test basic functionality
+            with resource_manager.resource_operation("initialization_test"):
+                pass
+
+            initialization_results.append(("thread_safety", True))
+            logging.info("PASS Thread-safe systems initialized successfully")
+        except Exception as e:
+            logging.error(f"FAIL Thread-safe system initialization failed: {e}")
+            initialization_results.append(("thread_safety", False))
+
+        # 3. Initialize error handling system
+        logging.info("3. Initializing robust error handling...")
+        try:
+            error_handler = get_robust_error_handler()
+
+            # Test error classification
+            test_error = Exception("Test error for initialization")
+            error_type = error_handler._classify_error(test_error)
+
+            initialization_results.append(("error_handling", True))
+            logging.info("PASS Robust error handling initialized successfully")
+        except Exception as e:
+            logging.error(f"FAIL Error handling initialization failed: {e}")
+            initialization_results.append(("error_handling", False))
+
+        # 4. Initialize runtime consistency testing
+        logging.info("4. Initializing runtime consistency testing...")
+        try:
+            consistency_tester = get_runtime_consistency_tester()
+
+            # Test basic validation functionality
+            test_graph = nx.Graph()
+            test_graph.add_edge(1, 2, weight=1.0)
+            test_context = {'test_mode': True, 'strict_validation': False}
+
+            validation_result = consistency_tester.validate_graph_integrity(test_graph, test_context)
+
+            initialization_results.append(("consistency_testing", True))
+            logging.info("PASS Runtime consistency testing initialized successfully")
+        except Exception as e:
+            logging.error(f"FAIL Consistency testing initialization failed: {e}")
+            initialization_results.append(("consistency_testing", False))
+
+        # 5. Initialize advanced memory management
+        logging.info("5. Initializing advanced memory management...")
+        try:
+            memory_manager = get_advanced_memory_manager()
+
+            # Test dynamic threshold calculation
+            thresholds = memory_manager.get_dynamic_memory_thresholds()
+
+            initialization_results.append(("memory_management", True))
+            logging.info("PASS Advanced memory management initialized successfully")
+        except Exception as e:
+            logging.error(f"FAIL Memory management initialization failed: {e}")
+            initialization_results.append(("memory_management", False))
+
+        # 6. System resource detection and optimization
+        logging.info("6. Detecting system resources and optimizing...")
+        try:
+            # Detect and log system capabilities
+            cpu_cores, total_ram_gb, available_ram_gb = detect_system_resources()
+            system_type, safety_margin, ram_efficiency = classify_system_type(cpu_cores, available_ram_gb)
+
+            # Calculate optimal workers
+            optimal_workers = calculate_optimal_workers()
+
+            logging.info(f"PASS System optimization completed:")
+            logging.info(f"  - System type: {system_type.upper()}")
+            logging.info(f"  - CPU cores: {cpu_cores}")
+            logging.info(f"  - Total RAM: {total_ram_gb:.1f}GB")
+            logging.info(f"  - Available RAM: {available_ram_gb:.1f}GB")
+            logging.info(f"  - Optimal workers: {optimal_workers}")
+            logging.info(f"  - Safety margin: {safety_margin:.1%}")
+
+            initialization_results.append(("system_optimization", True))
+        except Exception as e:
+            logging.error(f"FAIL System optimization failed: {e}")
+            initialization_results.append(("system_optimization", False))
+
+        # 7. Initialize dynamic thresholds
+        logging.info("7. Initializing dynamic thresholds...")
+        try:
+            dynamic_thresholds = get_dynamic_thresholds()
+            current_thresholds = dynamic_thresholds.get_current_thresholds()
+
+            logging.info(f"PASS Dynamic thresholds initialized:")
+            for threshold_name, value in current_thresholds.items():
+                logging.info(f"  - {threshold_name}: {value}")
+
+            initialization_results.append(("dynamic_thresholds", True))
+        except Exception as e:
+            logging.error(f"FAIL Dynamic thresholds initialization failed: {e}")
+            initialization_results.append(("dynamic_thresholds", False))
+
+        # Summary
+        successful_systems = sum(1 for _, success in initialization_results if success)
+        total_systems = len(initialization_results)
+
+        logging.info("=== Critical Improvements Initialization Summary ===")
+        logging.info(f"Successfully initialized: {successful_systems}/{total_systems} systems")
+
+        for system_name, success in initialization_results:
+            status = "PASS" if success else "FAIL"
+            logging.info(f"{status} {system_name}")
+
+        overall_success = successful_systems == total_systems
+
+        if overall_success:
+            logging.info("SUCCESS All critical improvements initialized successfully!")
+            logging.info("The application is ready for enhanced performance and reliability.")
+        else:
+            logging.warning("WARN Some systems failed to initialize. The application will run with reduced capabilities.")
+
+        return overall_success
+
+    except Exception as e:
+        logging.error(f"Critical failure during initialization: {e}")
+        logging.error(f"Traceback: {traceback.format_exc()}")
+        return False
+
+def get_system_status_summary() -> Dict[str, Any]:
+    """
+    Get a comprehensive summary of all system statuses.
+
+    Returns:
+        Dict containing status information for all critical systems
+    """
+    try:
+        status = {
+            'timestamp': time.time(),
+            'dependency_verification': {},
+            'thread_safety': {},
+            'error_handling': {},
+            'consistency_testing': {},
+            'memory_management': {},
+            'system_resources': {},
+            'overall_health': 'unknown'
+        }
+
+        # Dependency verification status
+        try:
+            verifier = _dependency_verifier
+            if verifier:
+                status['dependency_verification'] = {
+                    'available': True,
+                    'results': verifier.verification_results,
+                    'summary': verifier.get_verification_summary()
+                }
+            else:
+                status['dependency_verification'] = {'available': False}
+        except:
+            status['dependency_verification'] = {'available': False, 'error': 'Failed to get status'}
+
+        # Thread safety status
+        try:
+            resource_manager = get_thread_safe_resource_manager()
+            status['thread_safety'] = {
+                'available': True,
+                'active_operations': resource_manager.get_active_operations(),
+                'current_worker_count': resource_manager.get_worker_count(),
+                'performance_metrics': resource_manager.get_performance_metrics()
+            }
+        except Exception as e:
+            status['thread_safety'] = {'available': False, 'error': str(e)}
+
+        # Error handling status
+        try:
+            error_handler = get_robust_error_handler()
+            status['error_handling'] = {
+                'available': True,
+                'statistics': error_handler.get_error_statistics()
+            }
+        except Exception as e:
+            status['error_handling'] = {'available': False, 'error': str(e)}
+
+        # Consistency testing status
+        try:
+            consistency_tester = get_runtime_consistency_tester()
+            status['consistency_testing'] = {
+                'available': True,
+                'statistics': consistency_tester.get_test_statistics()
+            }
+        except Exception as e:
+            status['consistency_testing'] = {'available': False, 'error': str(e)}
+
+        # Memory management status
+        try:
+            memory_stats = monitor_memory_usage()
+            memory_manager = get_advanced_memory_manager()
+            thresholds = memory_manager.get_dynamic_memory_thresholds()
+
+            status['memory_management'] = {
+                'available': True,
+                'current_usage': memory_stats,
+                'dynamic_thresholds': thresholds
+            }
+        except Exception as e:
+            status['memory_management'] = {'available': False, 'error': str(e)}
+
+        # System resources status
+        try:
+            cpu_cores, total_ram_gb, available_ram_gb = detect_system_resources()
+            system_type, safety_margin, ram_efficiency = classify_system_type(cpu_cores, available_ram_gb)
+
+            status['system_resources'] = {
+                'available': True,
+                'cpu_cores': cpu_cores,
+                'total_ram_gb': total_ram_gb,
+                'available_ram_gb': available_ram_gb,
+                'system_type': system_type,
+                'safety_margin': safety_margin,
+                'ram_efficiency': ram_efficiency
+            }
+        except Exception as e:
+            status['system_resources'] = {'available': False, 'error': str(e)}
+
+        # Overall health assessment
+        available_systems = sum(1 for system_status in status.values()
+                              if isinstance(system_status, dict) and system_status.get('available', False))
+        total_systems = len([k for k in status.keys() if k != 'timestamp' and k != 'overall_health'])
+
+        if available_systems == total_systems:
+            status['overall_health'] = 'excellent'
+        elif available_systems >= total_systems * 0.8:
+            status['overall_health'] = 'good'
+        elif available_systems >= total_systems * 0.6:
+            status['overall_health'] = 'fair'
+        else:
+            status['overall_health'] = 'poor'
+
+        return status
+
+    except Exception as e:
+        return {
+            'timestamp': time.time(),
+            'overall_health': 'error',
+            'error': str(e)
+        }
+
+#==============================================================================
+#                           4. TEST INSTANCE INITIALIZATION
+#==============================================================================
+test_instance = {
+    'graph': nx.Graph(),
+    'red_nodes': [],
+    'weights': {}
+}
+
+def initialize_test_instance():
+    """Initialize a test graph instance with sample data"""
+    G = nx.Graph()
+    # Add nodes
+    nodes = range(1, 6)
+    for node in nodes:
+        G.add_node(node)
+
+    # Add edges with weights
+    edges_with_weights = [
+        (1, 2, 10), (1, 3, 15), (2, 3, 5),
+        (2, 4, 8), (3, 4, 12), (3, 5, 20), (4, 5, 7)
+    ]
+
+    for u, v, w in edges_with_weights:
+        G.add_edge(u, v, weight=w)
+
+    # Define red nodes (with constraints)
+    red_nodes = [1, 5]
+
+    # Update test instance
+    test_instance['graph'] = G
+    test_instance['red_nodes'] = red_nodes
+    test_instance['weights'] = {(u, v): w for u, v, w in edges_with_weights}
+
+    # Only log if logging is properly configured
+    try:
+        logging.info("Test instance initialized successfully")
+    except:
+        pass  # Ignore logging errors during import
+    return test_instance
+
+# Initialize test instance only if not already done
+if not test_instance.get('graph') or len(test_instance['graph'].nodes()) == 0:
+    initialize_test_instance()
+
+#==============================================================================
+#                           4. ADAPTIVE RESOURCE MANAGEMENT
+#==============================================================================
+
+def detect_system_resources():
+    """
+    Detect available system resources (CPU cores and RAM) with error handling.
+
+    Returns:
+        tuple: (cpu_cores, total_ram_gb, available_ram_gb)
+    """
+    try:
+        # Get CPU information
+        cpu_cores = psutil.cpu_count(logical=True)
+        if cpu_cores is None:
+            cpu_cores = multiprocessing.cpu_count()
+
+        # Get memory information
+        memory = psutil.virtual_memory()
+        total_ram_gb = memory.total / (1024**3)  # Convert to GB
+        available_ram_gb = memory.available / (1024**3)  # Convert to GB
+
+        logging.info(f"System resources detected: {cpu_cores} CPU cores, "
+                    f"{total_ram_gb:.1f}GB total RAM, {available_ram_gb:.1f}GB available RAM")
+
+        return cpu_cores, total_ram_gb, available_ram_gb
+
+    except Exception as e:
+        logging.warning(f"Failed to detect system resources: {e}. Using fallback values.")
+        # Fallback to conservative values
+        return 2, 4.0, 2.0
+
+def classify_system_type(cpu_cores, available_ram_gb):
+    """
+    Classify the system type based on CPU cores and available RAM.
+
+    Args:
+        cpu_cores (int): Number of CPU cores
+        available_ram_gb (float): Available RAM in GB
+
+    Returns:
+        tuple: (system_type, safety_margin, ram_efficiency)
+    """
+    # Check for workstation-class system
+    if cpu_cores >= WORKSTATION_MIN_CORES and available_ram_gb >= WORKSTATION_MIN_RAM:
+        return "workstation", WORKSTATION_SAFETY_MARGIN, WORKSTATION_RAM_EFFICIENCY
+
+    # Check for desktop-class system
+    elif cpu_cores >= DESKTOP_MIN_CORES and available_ram_gb >= DESKTOP_MIN_RAM:
+        return "desktop", DESKTOP_SAFETY_MARGIN, DESKTOP_RAM_EFFICIENCY
+
+    # Default to laptop/modest system
+    else:
+        return "laptop", LAPTOP_SAFETY_MARGIN, LAPTOP_RAM_EFFICIENCY
+
+def check_user_overrides():
+    """
+    Check for user-specified overrides via environment variables.
+
+    Returns:
+        dict: Dictionary with override values (None if not set)
+    """
+    overrides = {
+        'force_conservative': os.environ.get(ENV_FORCE_CONSERVATIVE_MODE, '').lower() in ('1', 'true', 'yes'),
+        'max_workers': None,
+        'safety_margin': None
+    }
+
+    # Check for max workers override
+    try:
+        max_workers_env = os.environ.get(ENV_MAX_WORKERS_OVERRIDE)
+        if max_workers_env:
+            overrides['max_workers'] = max(1, int(max_workers_env))
+    except (ValueError, TypeError):
+        logging.warning(f"Invalid {ENV_MAX_WORKERS_OVERRIDE} value: {max_workers_env}")
+
+    # Check for safety margin override
+    try:
+        safety_margin_env = os.environ.get(ENV_SAFETY_MARGIN_OVERRIDE)
+        if safety_margin_env:
+            margin = float(safety_margin_env)
+            if 0.1 <= margin <= 1.0:
+                overrides['safety_margin'] = margin
+            else:
+                logging.warning(f"Safety margin must be between 0.1 and 1.0, got: {margin}")
+    except (ValueError, TypeError):
+        logging.warning(f"Invalid {ENV_SAFETY_MARGIN_OVERRIDE} value: {safety_margin_env}")
+
+    return overrides
+
+def calculate_optimal_workers(safety_margin=None, min_ram_per_worker=None, max_workers=None):
+    """
+    ADAPTIVE SCALING: Calculate optimal number of worker processes based on system resources.
+    Automatically scales from conservative (laptops) to aggressive (workstations).
+
+    Args:
+        safety_margin (float): Safety margin for resource usage (0.0-1.0)
+        min_ram_per_worker (float): Minimum RAM per worker in GB
+        max_workers (int): Maximum number of workers (optional override)
+
+    Returns:
+        int: Optimal number of worker processes (adaptively limited based on system type)
+    """
+    global _current_worker_count, _resource_safety_margin
+
+    try:
+        cpu_cores, total_ram_gb, available_ram_gb = detect_system_resources()
+
+        # Check user overrides first
+        user_overrides = check_user_overrides()
+
+        # Force conservative mode if requested
+        if user_overrides['force_conservative']:
+            logging.info("CONSERVATIVE MODE: Forced via environment variable")
+            safety_margin = LAPTOP_SAFETY_MARGIN
+            max_allowed_workers = MAX_WORKERS_CONSERVATIVE
+            system_type = "conservative_override"
+        else:
+            # ADAPTIVE SCALING: Classify system and get appropriate parameters
+            if not ENABLE_ADAPTIVE_SCALING or cpu_cores < ADAPTIVE_SCALING_MIN_CORES or available_ram_gb < ADAPTIVE_SCALING_MIN_RAM:
+                # Fall back to conservative mode for very modest systems
+                system_type = "conservative_fallback"
+                safety_margin = LAPTOP_SAFETY_MARGIN if safety_margin is None else safety_margin
+                max_allowed_workers = MAX_WORKERS_CONSERVATIVE
+            else:
+                # Use adaptive classification
+                system_type, adaptive_safety_margin, ram_efficiency = classify_system_type(cpu_cores, available_ram_gb)
+
+                # Use adaptive safety margin if not explicitly provided
+                if safety_margin is None:
+                    safety_margin = adaptive_safety_margin
+
+                # Calculate dynamic maximum workers based on system capabilities
+                # Always leave MIN_CORES_FOR_OS cores for the OS
+                max_allowed_workers = max(1, cpu_cores - MIN_CORES_FOR_OS)
+
+                # Additional RAM-based limit for workstations
+                if system_type == "workstation":
+                    ram_based_max = int((available_ram_gb * ram_efficiency) / (min_ram_per_worker or MIN_RAM_PER_WORKER))
+                    max_allowed_workers = min(max_allowed_workers, ram_based_max)
+
+        # Apply user overrides
+        if user_overrides['safety_margin'] is not None:
+            safety_margin = user_overrides['safety_margin']
+            logging.info(f"Using user-specified safety margin: {safety_margin}")
+
+        if user_overrides['max_workers'] is not None:
+            max_allowed_workers = min(max_allowed_workers, user_overrides['max_workers'])
+            logging.info(f"Using user-specified max workers: {user_overrides['max_workers']}")
+
+        # Use defaults if not provided
+        if min_ram_per_worker is None:
+            min_ram_per_worker = MIN_RAM_PER_WORKER
+
+        # Update global safety margin
+        _resource_safety_margin = safety_margin
+
+        # Calculate workers based on CPU with adaptive safety margin
+        cpu_based_workers = max(1, int(cpu_cores * safety_margin))
+
+        # Calculate workers based on RAM with adaptive safety margin
+        usable_ram = max(MIN_MEMORY_GB, available_ram_gb * 0.8)  # Use 80% of available RAM
+        ram_based_workers = max(1, int((usable_ram * safety_margin) / min_ram_per_worker))
+
+        # Take the minimum to avoid resource contention
+        optimal_workers = min(cpu_based_workers, ram_based_workers, max_allowed_workers)
+
+        # Apply user-specified maximum limit if provided
+        if max_workers is not None:
+            optimal_workers = min(optimal_workers, max_workers)
+
+        # Ensure at least 1 worker
+        optimal_workers = max(1, optimal_workers)
+
+        # Emergency fallback for very low-resource systems
+        if available_ram_gb < LIMITED_MEMORY_GB:
+            optimal_workers = MAX_WORKERS_FALLBACK
+            logging.warning(f"calculate_optimal_workers: Very low RAM detected ({available_ram_gb:.1f}GB). Emergency fallback to {MAX_WORKERS_FALLBACK} worker.")
+        elif available_ram_gb < 8.0 and optimal_workers > 2:
+            optimal_workers = 2
+            logging.warning(f"calculate_optimal_workers: Limited RAM detected ({available_ram_gb:.1f}GB). Limiting to 2 workers max.")
+
+        _current_worker_count = optimal_workers
+
+        logging.info(f"ADAPTIVE SCALING: {system_type.upper()} system detected")
+        logging.info(f"Optimal workers calculated: {optimal_workers} "
+                    f"(CPU-based: {cpu_based_workers}, RAM-based: {ram_based_workers}, "
+                    f"Max allowed: {max_allowed_workers}, Safety margin: {safety_margin:.1%})")
+        logging.info(f"System specs: {cpu_cores} cores, {available_ram_gb:.1f}GB available RAM")
+
+        return optimal_workers
+
+    except Exception as e:
+        import traceback
+        logging.warning(f"calculate_optimal_workers: Failed to calculate optimal workers: {e}")
+        logging.debug(f"calculate_optimal_workers: Full traceback: {traceback.format_exc()}")
+        _current_worker_count = MAX_WORKERS_FALLBACK
+        return MAX_WORKERS_FALLBACK
+
+def monitor_cpu_usage():
+    """
+    Monitor current CPU usage and return current percentage.
+
+    Returns:
+        float: Current CPU usage percentage (0-100)
+    """
+    global _last_cpu_check, _cpu_check_interval
+
+    try:
+        current_time = time.time()
+
+        # Throttle CPU checks to avoid overhead
+        if current_time - _last_cpu_check < _cpu_check_interval:
+            return psutil.cpu_percent()
+
+        _last_cpu_check = current_time
+
+        # Get CPU usage with a short interval for accuracy
+        cpu_usage = psutil.cpu_percent(interval=0.1)
+
+        return cpu_usage
+
+    except Exception as e:
+        logging.warning(f"Failed to monitor CPU usage: {e}")
+        return 50.0  # Conservative fallback
+
+def get_adaptive_max_workers_for_operation(operation_type="general", base_workers=None):
+    """
+    Get adaptive maximum workers for specific operations based on system type.
+
+    Args:
+        operation_type (str): Type of operation ("cost_eval", "edge_swap", "general")
+        base_workers (int): Base number of workers (if None, uses current optimal)
+
+    Returns:
+        int: Maximum workers allowed for this operation
+    """
+    if base_workers is None:
+        base_workers = _current_worker_count or calculate_optimal_workers()
+
+    # Get system classification
+    try:
+        cpu_cores, _, available_ram_gb = detect_system_resources()
+        system_type, _, _ = classify_system_type(cpu_cores, available_ram_gb)
+
+        # Conservative limits for specific operations
+        if operation_type == "cost_eval":
+            if system_type == "workstation":
+                return min(base_workers, max(4, cpu_cores // 2))  # Up to half cores or 4, whichever is higher
+            elif system_type == "desktop":
+                return min(base_workers, 3)  # Up to 3 workers for desktops
+            else:
+                return min(base_workers, 2)  # Conservative for laptops
+
+        elif operation_type == "edge_swap":
+            if system_type == "workstation":
+                return min(base_workers, max(3, cpu_cores // 3))  # Up to 1/3 cores or 3, whichever is higher
+            elif system_type == "desktop":
+                return min(base_workers, 2)  # Up to 2 workers for desktops
+            else:
+                return 1  # Single worker for laptops (edge swap is memory intensive)
+
+        else:  # general
+            return base_workers
+
+    except Exception as e:
+        logging.warning(f"get_adaptive_max_workers_for_operation: Failed to get adaptive limits: {e}")
+        # Fallback to conservative limits
+        if operation_type == "cost_eval":
+            return min(base_workers or 2, 2)
+        elif operation_type == "edge_swap":
+            return 1
+        else:
+            return base_workers or 1
+
+def adaptive_worker_adjustment(current_workers, cpu_threshold=90.0):
+    """
+    Dynamically adjust worker count based on current CPU usage.
+
+    Args:
+        current_workers (int): Current number of workers
+        cpu_threshold (float): CPU usage threshold for throttling
+
+    Returns:
+        int: Adjusted number of workers
+    """
+    try:
+        cpu_usage = monitor_cpu_usage()
+
+        if cpu_usage > cpu_threshold:
+            # Reduce workers if CPU usage is too high
+            adjusted_workers = max(1, current_workers - 1)
+            # OPTIMIZATION: Reduced logging level to minimize overhead
+            logging.debug(f"adaptive_worker_adjustment: High CPU usage detected ({cpu_usage:.1f}%). "
+                          f"Reducing workers from {current_workers} to {adjusted_workers}")
+            return adjusted_workers
+        elif cpu_usage < cpu_threshold * 0.6 and current_workers < _current_worker_count:
+            # Increase workers if CPU usage is low and we're below optimal
+            adjusted_workers = min(_current_worker_count, current_workers + 1)
+            # OPTIMIZATION: Reduced logging level to minimize overhead
+            logging.debug(f"adaptive_worker_adjustment: Low CPU usage detected ({cpu_usage:.1f}%). "
+                        f"Increasing workers from {current_workers} to {adjusted_workers}")
+            return adjusted_workers
+
+        return current_workers
+
+    except Exception as e:
+        logging.warning(f"adaptive_worker_adjustment: Failed to adjust workers: {e}")
+        return current_workers
+
+
+
+def check_system_stability():
+    """
+    Check system stability and resource availability before intensive operations.
+
+    Returns:
+        tuple: (is_stable, warning_message)
+    """
+    try:
+        cpu_usage = psutil.cpu_percent(interval=0.5)
+        memory = psutil.virtual_memory()
+        available_ram_gb = memory.available / (1024**3)
+
+        warnings = []
+
+        # Check CPU usage
+        if cpu_usage > 95.0:
+            warnings.append(f"Very high CPU usage: {cpu_usage:.1f}%")
+        elif cpu_usage > 85.0:
+            warnings.append(f"High CPU usage: {cpu_usage:.1f}%")
+
+        # Check available memory
+        if available_ram_gb < 1.0:
+            warnings.append(f"Critical memory shortage: {available_ram_gb:.1f}GB available")
+        elif available_ram_gb < 2.0:
+            warnings.append(f"Low memory: {available_ram_gb:.1f}GB available")
+
+        # Check for system stability
+        is_stable = cpu_usage < 90.0 and available_ram_gb > 1.0
+
+        if warnings:
+            warning_message = "; ".join(warnings)
+            return is_stable, warning_message
+        else:
+            return True, "System resources are stable"
+
+    except Exception as e:
+        logging.warning(f"Failed to check system stability: {e}")
+        return False, f"System monitoring failed: {e}"
+
+def safe_execution_wrapper(func, *args, timeout=300, **kwargs):
+    """
+    Wrapper for safe execution of intensive operations with timeout and resource monitoring.
+
+    Args:
+        func: Function to execute
+        *args: Arguments for the function
+        timeout: Maximum execution time in seconds (default: 5 minutes)
+        **kwargs: Keyword arguments for the function
+
+    Returns:
+        Result of the function or raises appropriate exceptions
+    """
+    import threading
+
+    # Check system stability before starting
+    is_stable, message = check_system_stability()
+    if not is_stable:
+        logging.warning(f"System instability detected: {message}")
+        # Continue with reduced parallelization
+        if 'max_workers' in kwargs:
+            kwargs['max_workers'] = 1
+
+    result = None
+    exception = None
+
+    def target():
+        nonlocal result, exception
+        try:
+            result = func(*args, **kwargs)
+        except Exception as e:
+            exception = e
+
+    # Start execution in a separate thread
+    thread = threading.Thread(target=target)
+    thread.daemon = True
+    thread.start()
+
+    # Wait for completion with timeout
+    thread.join(timeout)
+
+    if thread.is_alive():
+        logging.error(f"Operation timed out after {timeout} seconds")
+        # Force garbage collection to free memory
+        gc.collect()
+        raise TimeoutError(f"Operation exceeded {timeout} second timeout")
+
+    if exception:
+        raise exception
+
+    return result
+
+def emergency_resource_cleanup():
+    """
+    Emergency cleanup function to free system resources.
+    Call this when system becomes unstable.
+    """
+    try:
+        # Force garbage collection
+        gc.collect()
+
+        # Log cleanup
+        logging.info("Emergency resource cleanup completed")
+
+    except Exception as e:
+        logging.warning(f"Emergency cleanup failed: {e}")
+
+def proactive_memory_cleanup(force_aggressive=False):
+    """
+    Proactive memory cleanup during algorithm execution.
+
+    Args:
+        force_aggressive: If True, performs more aggressive cleanup
+
+    Returns:
+        dict: Memory statistics before and after cleanup
+    """
+    try:
+        import psutil
+        process = psutil.Process()
+
+        # Get memory usage before cleanup
+        memory_before = process.memory_info().rss / (1024 * 1024)  # MB
+
+        # Standard cleanup
+        gc.collect()
+
+        # OPTIMIZATION: Only perform aggressive cleanup if memory usage is actually high
+        if force_aggressive and memory_before > 2048:  # Only for very high memory usage (2GB+)
+            # More conservative aggressive cleanup for memory-constrained situations
+
+            # Reduced GC cycles to minimize overhead
+            for _ in range(2):  # Reduced from 3 to 2
+                gc.collect()
+
+            # OPTIMIZATION: Skip GC threshold adjustment to reduce overhead
+            # The original threshold adjustment is too expensive for frequent calls
+
+        # Get memory usage after cleanup
+        memory_after = process.memory_info().rss / (1024 * 1024)  # MB
+        memory_freed = memory_before - memory_after
+
+        cleanup_stats = {
+            'memory_before_mb': memory_before,
+            'memory_after_mb': memory_after,
+            'memory_freed_mb': memory_freed,
+            'aggressive': force_aggressive
+        }
+
+        # OPTIMIZATION: Increased threshold and reduced logging level to minimize overhead
+        if memory_freed > 50:  # Increased from 10MB to 50MB
+            logging.debug(f"Memory cleanup freed {memory_freed:.1f}MB (before: {memory_before:.1f}MB, after: {memory_after:.1f}MB)")
+
+        return cleanup_stats
+
+    except Exception as e:
+        logging.debug(f"Proactive memory cleanup failed: {e}")  # Changed from warning to debug
+        return {'error': str(e)}
+
+def monitor_memory_usage():
+    """
+    Monitor current memory usage and return statistics.
+
+    Returns:
+        dict: Memory usage statistics
+    """
+    try:
+        import psutil
+
+        # System memory
+        system_memory = psutil.virtual_memory()
+
+        # Process memory
+        process = psutil.Process()
+        process_memory = process.memory_info()
+
+        stats = {
+            'system_total_gb': system_memory.total / (1024**3),
+            'system_available_gb': system_memory.available / (1024**3),
+            'system_used_percent': system_memory.percent,
+            'process_rss_mb': process_memory.rss / (1024**2),
+            'process_vms_mb': process_memory.vms / (1024**2),
+            'memory_pressure': system_memory.percent > 85,  # High memory usage
+            'critical_memory': system_memory.percent > 95   # Critical memory usage
+        }
+
+        return stats
+
+    except Exception as e:
+        logging.warning(f"Memory monitoring failed: {e}")
+        return {'error': str(e)}
+
+def adaptive_memory_management(current_operation="general"):
+    """
+    Adaptive memory management based on current system state and operation.
+
+    Args:
+        current_operation: Type of operation being performed
+
+    Returns:
+        dict: Memory management recommendations
+    """
+    try:
+        memory_stats = monitor_memory_usage()
+
+        if 'error' in memory_stats:
+            return {'action': 'continue', 'reason': 'monitoring_failed'}
+
+        recommendations = {
+            'action': 'continue',
+            'cleanup_needed': False,
+            'aggressive_cleanup': False,
+            'reduce_workers': False,
+            'fallback_sequential': False,
+            'memory_stats': memory_stats
+        }
+
+        # Determine actions based on memory pressure
+        if memory_stats['critical_memory']:
+            # Critical memory situation
+            recommendations.update({
+                'action': 'emergency_cleanup',
+                'cleanup_needed': True,
+                'aggressive_cleanup': True,
+                'reduce_workers': True,
+                'fallback_sequential': True,
+                'reason': f"Critical memory usage: {memory_stats['system_used_percent']:.1f}%"
+            })
+        elif memory_stats['memory_pressure']:
+            # High memory pressure
+            recommendations.update({
+                'action': 'reduce_load',
+                'cleanup_needed': True,
+                'aggressive_cleanup': False,
+                'reduce_workers': True,
+                'fallback_sequential': False,
+                'reason': f"High memory usage: {memory_stats['system_used_percent']:.1f}%"
+            })
+        elif memory_stats['system_used_percent'] > 70:
+            # Moderate memory usage - proactive cleanup
+            recommendations.update({
+                'action': 'proactive_cleanup',
+                'cleanup_needed': True,
+                'aggressive_cleanup': False,
+                'reduce_workers': False,
+                'fallback_sequential': False,
+                'reason': f"Moderate memory usage: {memory_stats['system_used_percent']:.1f}%"
+            })
+
+        # Operation-specific adjustments
+        if current_operation in ['simulated_annealing', 'parallel_local_search']:
+            # These operations are more memory-intensive
+            if memory_stats['system_used_percent'] > 60:
+                recommendations['cleanup_needed'] = True
+
+        return recommendations
+
+    except Exception as e:
+        logging.warning(f"Adaptive memory management failed: {e}")
+        return {'action': 'continue', 'error': str(e)}
+
+# Efficient Data Structures for Large Graphs
+class MemoryEfficientGraph:
+    """
+    Memory-efficient graph representation for very large graphs.
+    Uses sparse data structures and lazy evaluation to minimize memory usage.
+    """
+
+    def __init__(self, networkx_graph=None):
+        """Initialize from a NetworkX graph or create empty."""
+        self.nodes = set()
+        self.edges = {}  # adjacency list with edge weights
+        self.node_count = 0
+        self.edge_count = 0
+
+        if networkx_graph:
+            self._from_networkx(networkx_graph)
+
+    def _from_networkx(self, G):
+        """Convert from NetworkX graph to memory-efficient representation."""
+        self.nodes = set(G.nodes())
+        self.node_count = len(self.nodes)
+        self.edge_count = G.number_of_edges()
+
+        # Use sparse adjacency list
+        self.edges = {}
+        for node in self.nodes:
+            self.edges[node] = {}
+
+        for u, v, data in G.edges(data=True):
+            weight = data.get('weight', 1)
+            self.edges[u][v] = weight
+            self.edges[v][u] = weight  # Undirected graph
+
+    def to_networkx(self):
+        """Convert back to NetworkX graph when needed."""
+        G = nx.Graph()
+        G.add_nodes_from(self.nodes)
+
+        # Add edges (avoid duplicates in undirected graph)
+        added_edges = set()
+        for u in self.edges:
+            for v, weight in self.edges[u].items():
+                edge = tuple(sorted([u, v]))
+                if edge not in added_edges:
+                    G.add_edge(u, v, weight=weight)
+                    added_edges.add(edge)
+
+        return G
+
+    def has_edge(self, u, v):
+        """Check if edge exists."""
+        return u in self.edges and v in self.edges[u]
+
+    def get_weight(self, u, v):
+        """Get edge weight."""
+        if self.has_edge(u, v):
+            return self.edges[u][v]
+        return None
+
+    def neighbors(self, node):
+        """Get neighbors of a node."""
+        return self.edges.get(node, {}).keys()
+
+    def degree(self, node):
+        """Get degree of a node."""
+        return len(self.edges.get(node, {}))
+
+    def memory_usage_mb(self):
+        """Estimate memory usage in MB."""
+        try:
+            import sys
+            total_size = sys.getsizeof(self.nodes)
+            total_size += sys.getsizeof(self.edges)
+
+            for node_edges in self.edges.values():
+                total_size += sys.getsizeof(node_edges)
+                for neighbor, weight in node_edges.items():
+                    total_size += sys.getsizeof(neighbor) + sys.getsizeof(weight)
+
+            return total_size / (1024 * 1024)
+        except:
+            return 0.0
+
+class CompactSpanningTree:
+    """
+    Compact representation of spanning trees for memory efficiency.
+    Stores only essential information and computes derived properties on demand.
+    """
+
+    def __init__(self, edges=None, nodes=None):
+        """Initialize with edge list and node set."""
+        self.edges = set(edges) if edges else set()
+        self.nodes = set(nodes) if nodes else set()
+        self._adjacency = None  # Lazy computation
+        self._degrees = None    # Lazy computation
+
+        # Extract nodes from edges if not provided
+        if not self.nodes and self.edges:
+            for u, v in self.edges:
+                self.nodes.add(u)
+                self.nodes.add(v)
+
+    def _build_adjacency(self):
+        """Build adjacency list on demand."""
+        if self._adjacency is None:
+            self._adjacency = {node: set() for node in self.nodes}
+            for u, v in self.edges:
+                self._adjacency[u].add(v)
+                self._adjacency[v].add(u)
+
+    def _compute_degrees(self):
+        """Compute node degrees on demand."""
+        if self._degrees is None:
+            self._build_adjacency()
+            self._degrees = {node: len(neighbors) for node, neighbors in self._adjacency.items()}
+
+    def neighbors(self, node):
+        """Get neighbors of a node."""
+        self._build_adjacency()
+        return self._adjacency.get(node, set())
+
+    def degree(self, node):
+        """Get degree of a node."""
+        self._compute_degrees()
+        return self._degrees.get(node, 0)
+
+    def is_connected(self):
+        """Check if the tree is connected using DFS."""
+        if not self.nodes:
+            return True
+
+        self._build_adjacency()
+        visited = set()
+        start_node = next(iter(self.nodes))
+
+        def dfs(node):
+            visited.add(node)
+            for neighbor in self._adjacency[node]:
+                if neighbor not in visited:
+                    dfs(neighbor)
+
+        dfs(start_node)
+        return len(visited) == len(self.nodes)
+
+    def to_networkx(self, original_graph=None):
+        """Convert to NetworkX graph with edge weights from original graph."""
+        G = nx.Graph()
+        G.add_nodes_from(self.nodes)
+
+        for u, v in self.edges:
+            if original_graph and original_graph.has_edge(u, v):
+                weight = safe_get_edge_weight(original_graph, u, v, default_weight=1)
+            else:
+                weight = 1
+            G.add_edge(u, v, weight=weight)
+
+        return G
+
+    def memory_usage_mb(self):
+        """Estimate memory usage in MB."""
+        try:
+            import sys
+            total_size = sys.getsizeof(self.edges) + sys.getsizeof(self.nodes)
+            if self._adjacency:
+                total_size += sys.getsizeof(self._adjacency)
+                for neighbors in self._adjacency.values():
+                    total_size += sys.getsizeof(neighbors)
+            if self._degrees:
+                total_size += sys.getsizeof(self._degrees)
+            return total_size / (1024 * 1024)
+        except:
+            return 0.0
+
+def create_efficient_graph_representation(G, force_compact=False):
+    """
+    Create memory-efficient graph representation based on graph size.
+
+    Args:
+        G: NetworkX graph
+        force_compact: Force use of compact representation
+
+    Returns:
+        Efficient graph representation or original graph
+    """
+    try:
+        graph_size = len(G.nodes())
+        edge_count = len(G.edges())
+
+        # Determine if we need efficient representation using dynamic thresholds
+        dynamic_thresholds = get_dynamic_thresholds()
+        memory_stats = monitor_memory_usage()
+
+        use_efficient = (
+            force_compact or
+            dynamic_thresholds.should_use_memory_efficient(graph_size) or
+            edge_count > 2000 or
+            (memory_stats and memory_stats.get('memory_pressure', False))
+        )
+
+        if use_efficient:
+            logging.info(f"Using memory-efficient representation for graph ({graph_size} nodes, {edge_count} edges)")
+            return MemoryEfficientGraph(G)
+        else:
+            return G
+
+    except Exception as e:
+        logging.warning(f"Failed to create efficient representation: {e}")
+        return G
+
+# DOPO (FAST) Vectorized Algorithm Implementation
+def dopo_fast_vectorized_spanning_tree(G, max_children=float('inf'), penalty=1000, use_vectorization=None):
+    """
+    DOPO (FAST) vectorized algorithm for degree-constrained spanning tree generation.
+
+    Features:
+    - Direct O(n log n) generation instead of O(n²) complexity
+    - Complete NumPy vectorization for graphs with >500 nodes
+    - Efficient memory usage patterns for large graph structures
+    - Automatic fallback to standard algorithms for small graphs
+
+    Args:
+        G: NetworkX graph
+        max_children: Maximum degree constraint
+        penalty: Penalty for constraint violations
+        use_vectorization: Force vectorization (None=auto, True=force, False=disable)
+
+    Returns:
+        tuple: (spanning_tree, total_cost)
+    """
+    try:
+        import numpy as np
+        from scipy.sparse import csr_matrix
+        from scipy.sparse.csgraph import minimum_spanning_tree
+
+        graph_size = len(G.nodes())
+
+        # Determine if vectorization should be used based on dynamic thresholds
+        if use_vectorization is None:
+            # Auto-detect using dynamic thresholds and memory pressure
+            dynamic_thresholds = get_dynamic_thresholds()
+            memory_stats = monitor_memory_usage()
+            use_vectorization = (
+                dynamic_thresholds.should_use_vectorization(graph_size) and
+                not memory_stats.get('memory_pressure', False)
+            )
+
+        if not use_vectorization or graph_size < 50:
+            # Use standard greedy algorithm for small graphs or when vectorization is disabled
+            return greedy_spanning_tree(G, max_children, penalty)
+
+        logging.info(f"Using DOPO (FAST) vectorized algorithm for graph with {graph_size} nodes")
+
+        # Convert graph to efficient vectorized representation
+        node_list = list(G.nodes())
+        node_to_idx = {node: idx for idx, node in enumerate(node_list)}
+        n = len(node_list)
+
+        # Create sparse adjacency matrix with edge weights
+        edges = []
+        weights = []
+
+        for u, v, data in G.edges(data=True):
+            u_idx = node_to_idx[u]
+            v_idx = node_to_idx[v]
+            weight = data.get('weight', 1)
+
+            edges.append((u_idx, v_idx))
+            weights.append(weight)
+
+        # Build sparse adjacency matrix
+        if edges:
+            edges_array = np.array(edges)
+            weights_array = np.array(weights, dtype=np.float64)
+
+            # Create symmetric sparse matrix
+            row_indices = np.concatenate([edges_array[:, 0], edges_array[:, 1]])
+            col_indices = np.concatenate([edges_array[:, 1], edges_array[:, 0]])
+            data_values = np.concatenate([weights_array, weights_array])
+
+            adjacency_matrix = csr_matrix(
+                (data_values, (row_indices, col_indices)),
+                shape=(n, n)
+            )
+        else:
+            # Empty graph
+            adjacency_matrix = csr_matrix((n, n))
+
+        # Apply DOPO (FAST) algorithm with degree constraints
+        spanning_tree_matrix = _dopo_fast_core_algorithm(
+            adjacency_matrix, max_children, node_list, penalty
+        )
+
+        # Convert back to NetworkX graph
+        result_tree = _sparse_matrix_to_networkx(
+            spanning_tree_matrix, node_list, G
+        )
+
+        # Calculate total cost
+        total_cost = calculate_cost_greedy(result_tree, max_children, penalty)
+
+        logging.info(f"DOPO (FAST) vectorized algorithm completed: {len(result_tree.edges())} edges, cost={total_cost}")
+
+        return result_tree, total_cost
+
+    except ImportError as e:
+        logging.warning(f"NumPy/SciPy not available for vectorization: {e}. Using standard algorithm.")
+        return greedy_spanning_tree(G, max_children, penalty)
+    except Exception as e:
+        logging.warning(f"DOPO (FAST) vectorized algorithm failed: {e}. Using standard algorithm.")
+        return greedy_spanning_tree(G, max_children, penalty)
+
+def _dopo_fast_core_algorithm(adjacency_matrix, max_children, node_list, penalty):
+    """
+    Core DOPO (FAST) algorithm implementation with O(n log n) complexity.
+
+    Args:
+        adjacency_matrix: Sparse CSR matrix representing the graph
+        max_children: Maximum degree constraint
+        node_list: List of original node identifiers
+        penalty: Penalty for constraint violations
+
+    Returns:
+        Sparse matrix representing the spanning tree
+    """
+    try:
+        import numpy as np
+        from scipy.sparse import csr_matrix
+        from scipy.sparse.csgraph import minimum_spanning_tree
+        import heapq
+
+        n = adjacency_matrix.shape[0]
+
+        if n <= 1:
+            return csr_matrix((n, n))
+
+        # Initialize data structures for vectorized operations
+        in_tree = np.zeros(n, dtype=bool)
+        parent = np.full(n, -1, dtype=np.int32)
+        key = np.full(n, np.inf, dtype=np.float64)
+        degree_count = np.zeros(n, dtype=np.int32)
+
+        # Priority queue for efficient edge selection
+        # Format: (weight, node_idx, parent_idx)
+        pq = []
+
+        # Start with node 0
+        start_node = 0
+        key[start_node] = 0.0
+        heapq.heappush(pq, (0.0, start_node, -1))
+
+        # Result edges for spanning tree
+        tree_edges = []
+
+        # DOPO (FAST) main loop - O(n log n) complexity
+        while pq and len(tree_edges) < n - 1:
+            current_weight, u, parent_u = heapq.heappop(pq)
+
+            # Skip if already processed
+            if in_tree[u]:
+                continue
+
+            # Add node to tree
+            in_tree[u] = True
+
+            # Add edge to spanning tree (except for start node)
+            if parent_u != -1:
+                tree_edges.append((parent_u, u, current_weight))
+                degree_count[parent_u] += 1
+                degree_count[u] += 1
+
+            # Update adjacent nodes with vectorized operations
+            _update_adjacent_nodes_vectorized(
+                adjacency_matrix, u, in_tree, key, parent,
+                degree_count, max_children, penalty, pq
+            )
+
+        # Build sparse matrix from tree edges
+        if tree_edges:
+            tree_edges_array = np.array(tree_edges)
+            row_indices = np.concatenate([tree_edges_array[:, 0], tree_edges_array[:, 1]])
+            col_indices = np.concatenate([tree_edges_array[:, 1], tree_edges_array[:, 0]])
+            weights = np.concatenate([tree_edges_array[:, 2], tree_edges_array[:, 2]])
+
+            spanning_tree_matrix = csr_matrix(
+                (weights, (row_indices, col_indices)),
+                shape=(n, n)
+            )
+        else:
+            spanning_tree_matrix = csr_matrix((n, n))
+
+        return spanning_tree_matrix
+
+    except Exception as e:
+        logging.error(f"DOPO (FAST) core algorithm failed: {e}")
+        # Return empty sparse matrix as fallback
+        return csr_matrix((n, n))
+
+def _update_adjacent_nodes_vectorized(adjacency_matrix, u, in_tree, key, parent,
+                                    degree_count, max_children, penalty, pq):
+    """
+    Vectorized update of adjacent nodes for DOPO (FAST) algorithm.
+
+    Args:
+        adjacency_matrix: Sparse CSR matrix
+        u: Current node index
+        in_tree: Boolean array of nodes in tree
+        key: Array of minimum edge weights to reach each node
+        parent: Array of parent nodes
+        degree_count: Array of current node degrees
+        max_children: Maximum degree constraint
+        penalty: Penalty for constraint violations
+        pq: Priority queue for edge selection
+    """
+    try:
+        import numpy as np
+        import heapq
+
+        # Get neighbors of current node using sparse matrix operations
+        start_idx = adjacency_matrix.indptr[u]
+        end_idx = adjacency_matrix.indptr[u + 1]
+
+        if start_idx == end_idx:
+            return  # No neighbors
+
+        # Extract neighbor indices and weights vectorized
+        neighbor_indices = adjacency_matrix.indices[start_idx:end_idx]
+        neighbor_weights = adjacency_matrix.data[start_idx:end_idx]
+
+        # Filter out nodes already in tree using vectorized operations
+        not_in_tree_mask = ~in_tree[neighbor_indices]
+        valid_neighbors = neighbor_indices[not_in_tree_mask]
+        valid_weights = neighbor_weights[not_in_tree_mask]
+
+        if len(valid_neighbors) == 0:
+            return
+
+        # Apply degree constraint penalty vectorized
+        adjusted_weights = _apply_degree_penalty_vectorized(
+            valid_weights, valid_neighbors, u, degree_count, max_children, penalty
+        )
+
+        # Update keys and parents for improved paths
+        improvement_mask = adjusted_weights < key[valid_neighbors]
+        improved_neighbors = valid_neighbors[improvement_mask]
+        improved_weights = adjusted_weights[improvement_mask]
+
+        if len(improved_neighbors) > 0:
+            # Vectorized updates
+            key[improved_neighbors] = improved_weights
+            parent[improved_neighbors] = u
+
+            # Add to priority queue
+            for neighbor, weight in zip(improved_neighbors, improved_weights):
+                heapq.heappush(pq, (weight, neighbor, u))
+
+    except Exception as e:
+        logging.warning(f"Vectorized adjacent nodes update failed: {e}")
+
+def _apply_degree_penalty_vectorized(weights, neighbor_indices, parent_node,
+                                   degree_count, max_children, penalty):
+    """
+    Apply degree constraint penalty using vectorized operations.
+
+    Args:
+        weights: Array of edge weights
+        neighbor_indices: Array of neighbor node indices
+        parent_node: Parent node index
+        degree_count: Array of current node degrees
+        max_children: Maximum degree constraint
+        penalty: Penalty for constraint violations
+
+    Returns:
+        Array of adjusted weights with penalty applied
+    """
+    try:
+        import numpy as np
+
+        if max_children == float('inf'):
+            return weights.copy()
+
+        adjusted_weights = weights.copy()
+
+        # Check parent node degree constraint
+        if degree_count[parent_node] >= max_children:
+            adjusted_weights += penalty
+
+        # Check neighbor node degree constraints vectorized
+        neighbor_violations = degree_count[neighbor_indices] >= max_children
+        adjusted_weights[neighbor_violations] += penalty
+
+        return adjusted_weights
+
+    except Exception as e:
+        logging.warning(f"Vectorized degree penalty application failed: {e}")
+        return weights.copy()
+
+def _sparse_matrix_to_networkx(sparse_matrix, node_list, original_graph):
+    """
+    Convert sparse matrix back to NetworkX graph with original node labels and edge weights.
+
+    Args:
+        sparse_matrix: Sparse CSR matrix representing the spanning tree
+        node_list: List of original node identifiers
+        original_graph: Original NetworkX graph for edge weight lookup
+
+    Returns:
+        NetworkX graph representing the spanning tree
+    """
+    try:
+        import networkx as nx
+        import numpy as np
+
+        # Create new graph
+        result_graph = nx.Graph()
+        result_graph.add_nodes_from(node_list)
+
+        # Convert sparse matrix to coordinate format for efficient iteration
+        coo_matrix = sparse_matrix.tocoo()
+
+        # Add edges with original weights
+        added_edges = set()
+        for i, j, weight in zip(coo_matrix.row, coo_matrix.col, coo_matrix.data):
+            # Avoid duplicate edges in undirected graph
+            edge = tuple(sorted([node_list[i], node_list[j]]))
+            if edge not in added_edges:
+                u, v = node_list[i], node_list[j]
+
+                # Get original weight from the graph
+                if original_graph.has_edge(u, v):
+                    original_weight = safe_get_edge_weight(original_graph, u, v, default_weight=weight)
+                else:
+                    original_weight = weight
+
+                result_graph.add_edge(u, v, weight=original_weight)
+                added_edges.add(edge)
+
+        return result_graph
+
+    except Exception as e:
+        logging.error(f"Sparse matrix to NetworkX conversion failed: {e}")
+        # Return empty graph as fallback
+        import networkx as nx
+        result_graph = nx.Graph()
+        result_graph.add_nodes_from(node_list)
+        return result_graph
+
+def vectorized_cost_calculation(spanning_tree_matrix, node_degrees, max_children, penalty):
+    """
+    Vectorized cost calculation for spanning trees using NumPy operations.
+
+    Args:
+        spanning_tree_matrix: Sparse matrix representing the spanning tree
+        node_degrees: Array of node degrees
+        max_children: Maximum degree constraint
+        penalty: Penalty for constraint violations
+
+    Returns:
+        Total cost of the spanning tree
+    """
+    try:
+        import numpy as np
+
+        # Calculate edge weight sum using sparse matrix operations
+        edge_weight_sum = spanning_tree_matrix.sum() / 2  # Divide by 2 for undirected graph
+
+        # Calculate degree constraint violations vectorized
+        if max_children != float('inf'):
+            violations = np.maximum(0, node_degrees - max_children)
+            penalty_cost = penalty * violations.sum()
+        else:
+            penalty_cost = 0
+
+        total_cost = edge_weight_sum + penalty_cost
+        return float(total_cost)
+
+    except Exception as e:
+        logging.warning(f"Vectorized cost calculation failed: {e}")
+        return float('inf')
+
+# Dynamic Graph Size Thresholds Implementation
+class DynamicGraphThresholds:
+    """
+    Dynamic graph size thresholds that adapt to system capabilities.
+
+    Features:
+    - Automatic threshold calculation based on system resources
+    - Performance-based threshold adjustment
+    - Hardware-specific optimization
+    - Real-time threshold adaptation
+    """
+
+    def __init__(self):
+        """Initialize dynamic thresholds with system detection."""
+        self.system_detected = False
+        self.cpu_cores = 1
+        self.total_ram_gb = 1.0
+        self.available_ram_gb = 1.0
+        self.system_type = "laptop"
+
+        # Base thresholds (conservative defaults)
+        self.base_thresholds = {
+            "large_graph": 500,
+            "parallel_min": 50,
+            "sequential_force": 8000,
+            "vectorization": 500,
+            "memory_efficient": 200,
+            "ultra_fast_generation": True
+        }
+
+        # Current adaptive thresholds
+        self.current_thresholds = self.base_thresholds.copy()
+
+        # Performance history for adaptive adjustment
+        self.performance_history = []
+        self.threshold_adjustments = {}
+
+        # Initialize system detection
+        self._detect_system_capabilities()
+        self._calculate_adaptive_thresholds()
+
+    def _detect_system_capabilities(self):
+        """Detect system capabilities for threshold calculation."""
+        try:
+            self.cpu_cores, self.total_ram_gb, self.available_ram_gb = detect_system_resources()
+            self.system_type, _, _ = classify_system_type(self.cpu_cores, self.available_ram_gb)
+            self.system_detected = True
+
+            logging.info(f"Dynamic thresholds: System detected - {self.system_type.upper()} "
+                        f"({self.cpu_cores} cores, {self.available_ram_gb:.1f}GB available)")
+        except Exception as e:
+            logging.warning(f"Failed to detect system for dynamic thresholds: {e}")
+            self.system_detected = False
+
+    def _calculate_adaptive_thresholds(self):
+        """Calculate adaptive thresholds based on system capabilities."""
+        if not self.system_detected:
+            return
+
+        # System-specific threshold multipliers
+        if self.system_type == "workstation":
+            # High-end workstation: aggressive parallelization
+            multipliers = {
+                "large_graph": 0.6,      # 300 nodes
+                "parallel_min": 0.4,     # 20 nodes
+                "sequential_force": 3.0,  # 24000 nodes
+                "vectorization": 0.8,    # 400 nodes
+                "memory_efficient": 0.5   # 100 nodes
+            }
+        elif self.system_type == "desktop":
+            # Desktop: balanced approach
+            multipliers = {
+                "large_graph": 0.8,      # 400 nodes
+                "parallel_min": 0.6,     # 30 nodes
+                "sequential_force": 2.0,  # 16000 nodes
+                "vectorization": 0.9,    # 450 nodes
+                "memory_efficient": 0.75  # 150 nodes
+            }
+        else:  # laptop
+            # Laptop: conservative approach
+            multipliers = {
+                "large_graph": 1.2,      # 600 nodes
+                "parallel_min": 1.5,     # 75 nodes
+                "sequential_force": 1.0,  # 8000 nodes
+                "vectorization": 1.1,    # 550 nodes
+                "memory_efficient": 1.0   # 200 nodes
+            }
+
+        # Apply RAM-based adjustments
+        ram_factor = min(2.0, max(0.5, self.available_ram_gb / 8.0))  # Normalize to 8GB baseline
+
+        # Apply CPU-based adjustments
+        cpu_factor = min(2.0, max(0.5, self.cpu_cores / 4.0))  # Normalize to 4 cores baseline
+
+        # Calculate adaptive thresholds
+        for threshold_name, base_value in self.base_thresholds.items():
+            if threshold_name == "ultra_fast_generation":
+                # Enable ultra-fast generation on powerful systems
+                self.current_thresholds[threshold_name] = (
+                    self.system_type in ["workstation", "desktop"] and
+                    self.cpu_cores >= 4 and
+                    self.available_ram_gb >= 4.0
+                )
+            elif threshold_name in multipliers:
+                # Apply system-specific and resource-based multipliers
+                system_multiplier = multipliers[threshold_name]
+                resource_multiplier = (ram_factor + cpu_factor) / 2.0
+                final_multiplier = (system_multiplier + resource_multiplier) / 2.0
+
+                self.current_thresholds[threshold_name] = int(base_value * final_multiplier)
+            else:
+                self.current_thresholds[threshold_name] = base_value
+
+        # Ensure logical threshold ordering
+        self._validate_threshold_consistency()
+
+        logging.info(f"Dynamic thresholds calculated: {self.current_thresholds}")
+
+    def _validate_threshold_consistency(self):
+        """Ensure thresholds maintain logical relationships."""
+        # Ensure parallel_min < large_graph < sequential_force
+        if self.current_thresholds["parallel_min"] >= self.current_thresholds["large_graph"]:
+            self.current_thresholds["parallel_min"] = max(10, self.current_thresholds["large_graph"] // 4)
+
+        if self.current_thresholds["large_graph"] >= self.current_thresholds["sequential_force"]:
+            self.current_thresholds["sequential_force"] = self.current_thresholds["large_graph"] * 2
+
+        # Ensure vectorization threshold is reasonable
+        if self.current_thresholds["vectorization"] < self.current_thresholds["large_graph"]:
+            self.current_thresholds["vectorization"] = self.current_thresholds["large_graph"]
+
+        # Ensure memory_efficient threshold is reasonable
+        if self.current_thresholds["memory_efficient"] >= self.current_thresholds["large_graph"]:
+            self.current_thresholds["memory_efficient"] = max(50, self.current_thresholds["large_graph"] // 2)
+
+    def get_threshold(self, threshold_name):
+        """Get a specific threshold value."""
+        return self.current_thresholds.get(threshold_name, self.base_thresholds.get(threshold_name, 500))
+
+    def should_use_parallel(self, graph_size):
+        """Determine if parallel processing should be used for given graph size."""
+        return (graph_size >= self.get_threshold("parallel_min") and
+                graph_size < self.get_threshold("sequential_force"))
+
+    def should_use_vectorization(self, graph_size):
+        """Determine if vectorization should be used for given graph size."""
+        return graph_size >= self.get_threshold("vectorization")
+
+    def should_use_memory_efficient(self, graph_size):
+        """Determine if memory-efficient structures should be used."""
+        return graph_size >= self.get_threshold("memory_efficient")
+
+    def is_large_graph(self, graph_size):
+        """Determine if graph is considered large."""
+        return graph_size >= self.get_threshold("large_graph")
+
+    def should_force_sequential(self, graph_size):
+        """Determine if sequential processing should be forced."""
+        return graph_size >= self.get_threshold("sequential_force")
+
+    def get_ultra_fast_generation(self):
+        """Get ultra-fast generation setting."""
+        return self.current_thresholds["ultra_fast_generation"]
+
+    def record_performance(self, graph_size, algorithm, execution_time, memory_usage):
+        """Record performance data for adaptive threshold adjustment."""
+        performance_data = {
+            "graph_size": graph_size,
+            "algorithm": algorithm,
+            "execution_time": execution_time,
+            "memory_usage": memory_usage,
+            "timestamp": time.time()
+        }
+
+        self.performance_history.append(performance_data)
+
+        # Keep only recent performance data (last 100 entries)
+        if len(self.performance_history) > 100:
+            self.performance_history = self.performance_history[-100:]
+
+        # Trigger adaptive adjustment if we have enough data
+        if len(self.performance_history) >= 10:
+            self._adaptive_threshold_adjustment()
+
+    def _adaptive_threshold_adjustment(self):
+        """Adjust thresholds based on performance history."""
+        try:
+            # Analyze recent performance trends
+            recent_data = self.performance_history[-20:]  # Last 20 operations
+
+            # Calculate average performance metrics
+            avg_time_by_size = {}
+            avg_memory_by_size = {}
+
+            for data in recent_data:
+                size_bucket = (data["graph_size"] // 100) * 100  # Group by 100s
+                if size_bucket not in avg_time_by_size:
+                    avg_time_by_size[size_bucket] = []
+                    avg_memory_by_size[size_bucket] = []
+
+                avg_time_by_size[size_bucket].append(data["execution_time"])
+                avg_memory_by_size[size_bucket].append(data["memory_usage"])
+
+            # Identify performance bottlenecks and adjust thresholds
+            for size_bucket, times in avg_time_by_size.items():
+                if len(times) >= 3:  # Need at least 3 samples
+                    avg_time = sum(times) / len(times)
+                    avg_memory = sum(avg_memory_by_size[size_bucket]) / len(avg_memory_by_size[size_bucket])
+
+                    # If performance is poor, increase thresholds (be more conservative)
+                    if avg_time > 30.0 or avg_memory > 1000:  # 30 seconds or 1GB
+                        self._increase_thresholds(0.1)  # 10% increase
+                    # If performance is excellent, decrease thresholds (be more aggressive)
+                    elif avg_time < 5.0 and avg_memory < 200:  # 5 seconds and 200MB
+                        self._decrease_thresholds(0.05)  # 5% decrease
+
+        except Exception as e:
+            logging.warning(f"Adaptive threshold adjustment failed: {e}")
+
+    def _increase_thresholds(self, factor):
+        """Increase thresholds to be more conservative."""
+        adjustable_thresholds = ["large_graph", "parallel_min", "vectorization", "memory_efficient"]
+
+        for threshold_name in adjustable_thresholds:
+            old_value = self.current_thresholds[threshold_name]
+            new_value = int(old_value * (1 + factor))
+            self.current_thresholds[threshold_name] = new_value
+
+            if threshold_name not in self.threshold_adjustments:
+                self.threshold_adjustments[threshold_name] = []
+            self.threshold_adjustments[threshold_name].append(("increase", factor, old_value, new_value))
+
+        self._validate_threshold_consistency()
+        logging.info(f"Increased thresholds by {factor*100:.1f}% due to performance concerns")
+
+    def _decrease_thresholds(self, factor):
+        """Decrease thresholds to be more aggressive."""
+        adjustable_thresholds = ["large_graph", "parallel_min", "vectorization", "memory_efficient"]
+
+        for threshold_name in adjustable_thresholds:
+            old_value = self.current_thresholds[threshold_name]
+            # Don't go below base thresholds
+            min_value = self.base_thresholds[threshold_name] // 2
+            new_value = max(min_value, int(old_value * (1 - factor)))
+            self.current_thresholds[threshold_name] = new_value
+
+            if threshold_name not in self.threshold_adjustments:
+                self.threshold_adjustments[threshold_name] = []
+            self.threshold_adjustments[threshold_name].append(("decrease", factor, old_value, new_value))
+
+        self._validate_threshold_consistency()
+        logging.info(f"Decreased thresholds by {factor*100:.1f}% due to excellent performance")
+
+    def get_current_thresholds(self):
+        """Get all current threshold values."""
+        return self.current_thresholds.copy()
+
+    def reset_to_defaults(self):
+        """Reset thresholds to default values."""
+        self.current_thresholds = self.base_thresholds.copy()
+        self.performance_history = []
+        self.threshold_adjustments = {}
+        self._calculate_adaptive_thresholds()
+        logging.info("Dynamic thresholds reset to defaults")
+
+# Global instance of dynamic thresholds
+_dynamic_thresholds = None
+
+def get_dynamic_thresholds():
+    """Get the global dynamic thresholds instance."""
+    global _dynamic_thresholds
+    if _dynamic_thresholds is None:
+        _dynamic_thresholds = DynamicGraphThresholds()
+    return _dynamic_thresholds
+
+def adaptive_timeout_calculation(graph_size, base_timeout=300):
+    """
+    Calculate adaptive timeout based on graph size and system resources.
+
+    Args:
+        graph_size: Number of nodes in the graph
+        base_timeout: Base timeout in seconds
+
+    Returns:
+        int: Calculated timeout in seconds
+    """
+    try:
+        # Base calculation: larger graphs need more time
+        size_factor = max(1.0, graph_size / 100.0)
+        calculated_timeout = int(base_timeout * size_factor)
+
+        # Adjust based on available resources
+        cpu_cores, _, available_ram_gb = detect_system_resources()
+
+        # Reduce timeout if resources are limited
+        if available_ram_gb < 2.0:
+            calculated_timeout = min(calculated_timeout, 180)  # Max 3 minutes for low memory
+        elif available_ram_gb < 4.0:
+            calculated_timeout = min(calculated_timeout, 600)  # Max 10 minutes for limited memory
+
+        # Increase timeout if we have plenty of resources
+        if available_ram_gb > 8.0 and cpu_cores > 4:
+            calculated_timeout = min(calculated_timeout * 1.5, 1800)  # Max 30 minutes even with good resources
+
+        return max(60, calculated_timeout)  # Minimum 1 minute timeout
+
+    except Exception:
+        return base_timeout
+
+#==============================================================================
+#                           5. FUNZIONI UNITARIE DI BASE
+#==============================================================================
+def calculate_cost_base(spanning_tree, max_children, penalty, counter):
+    """
+    Optimized cost calculation for spanning trees with performance improvements.
+
+    Args:
+        spanning_tree: Grafo che rappresenta l'albero di copertura
+        max_children: Numero massimo di figli per nodo
+        penalty: Penalità per violazione dei vincoli
+        counter: Lista contenente il contatore per le chiamate della funzione
+
+    Returns:
+        total_cost: Costo totale dell'albero
+    """
+    counter[0] += 1  # Incrementa il contatore associato all'algoritmo
+
+    # PERFORMANCE OPTIMIZATION: Use more efficient edge weight calculation
+    if spanning_tree.number_of_edges() == 0:
+        return 0.0
+
+    # Calculate edge weights sum more efficiently
+    total_cost = sum(data.get('weight', 1) for _, _, data in spanning_tree.edges(data=True))
+
+    # PERFORMANCE OPTIMIZATION: Pre-calculate degrees to avoid repeated calls
+    degrees = dict(spanning_tree.degree())
+
+    # PERFORMANCE OPTIMIZATION: Only check constraint violations if max_children is finite
+    if max_children != float('inf'):
+        # More efficient constraint violation calculation
+        violations = 0
+        for node in spanning_tree.nodes():
+            # Count children more efficiently by checking degree relationships
+            node_degree = degrees[node]
+            children_count = 0
+
+            for neighbor in spanning_tree.neighbors(node):
+                if degrees[neighbor] < node_degree:
+                    children_count += 1
+
+            if children_count > max_children:
+                violations += children_count - max_children
+
+        total_cost += penalty * violations
+
+    return total_cost
+
+# Usa la function.partial per creare versioni specifiche per ogni algoritmo
+calculate_cost_greedy = partial(calculate_cost_base, counter=greedy_cost_calls)
+calculate_cost_local = partial(calculate_cost_base, counter=local_search_cost_calls)
+calculate_cost_sa = partial(calculate_cost_base, counter=sa_cost_calls)
+
+# OPTIMIZATION: Incremental cost calculation class for better performance
+class IncrementalCostCalculator:
+    """
+    Optimized cost calculator that supports incremental updates for edge swaps.
+    Avoids full recalculation when only small changes are made to the tree.
+    """
+
+    def __init__(self, spanning_tree, max_children, penalty):
+        self.max_children = max_children
+        self.penalty = penalty
+        self.current_cost = None
+        self.edge_weights_sum = 0.0
+        self.constraint_violations = 0
+        self.degrees = {}
+        self._update_full_state(spanning_tree)
+
+    def _update_full_state(self, spanning_tree):
+        """Update the full state from the spanning tree."""
+        # Calculate edge weights sum
+        self.edge_weights_sum = sum(data.get('weight', 1) for _, _, data in spanning_tree.edges(data=True))
+
+        # Pre-calculate degrees
+        self.degrees = dict(spanning_tree.degree())
+
+        # Calculate constraint violations
+        self.constraint_violations = 0
+        if self.max_children != float('inf'):
+            for node in spanning_tree.nodes():
+                node_degree = self.degrees[node]
+                children_count = 0
+
+                for neighbor in spanning_tree.neighbors(node):
+                    if self.degrees[neighbor] < node_degree:
+                        children_count += 1
+
+                if children_count > self.max_children:
+                    self.constraint_violations += children_count - self.max_children
+
+        # Calculate total cost
+        self.current_cost = self.edge_weights_sum + (self.penalty * self.constraint_violations)
+
+    def get_cost(self):
+        """Get the current cost."""
+        return self.current_cost
+
+    def calculate_edge_swap_cost_delta(self, spanning_tree, edge_to_remove, edge_to_add, edge_add_weight):
+        """
+        Calculate the cost delta for an edge swap without full recalculation.
+        Returns the cost change (positive = increase, negative = decrease).
+        """
+        try:
+            # Get weight of edge to remove
+            edge_remove_weight = spanning_tree.edges[edge_to_remove].get('weight', 1)
+
+            # Weight delta
+            weight_delta = edge_add_weight - edge_remove_weight
+
+            # For constraint violations, we need to check the impact
+            # This is more complex and might require partial recalculation
+            # For now, we'll use a simplified approach
+
+            return weight_delta  # Simplified - only considers weight change
+
+        except Exception:
+            # Fallback to full calculation if incremental fails
+            return None
+
+    def apply_edge_swap(self, spanning_tree, edge_to_remove, edge_to_add, edge_add_weight):
+        """
+        Apply an edge swap and update the incremental state.
+        """
+        try:
+            # Calculate delta first
+            delta = self.calculate_edge_swap_cost_delta(spanning_tree, edge_to_remove, edge_to_add, edge_add_weight)
+
+            if delta is not None:
+                # Apply the change
+                self.current_cost += delta
+
+                # Update edge weights sum
+                edge_remove_weight = spanning_tree.edges[edge_to_remove].get('weight', 1)
+                self.edge_weights_sum += (edge_add_weight - edge_remove_weight)
+
+                # For degrees and violations, we need to recalculate
+                # This is still more efficient than full recalculation
+                self._update_degrees_and_violations(spanning_tree)
+
+                return True
+            else:
+                # Fallback to full update
+                self._update_full_state(spanning_tree)
+                return False
+
+        except Exception:
+            # Fallback to full update
+            self._update_full_state(spanning_tree)
+            return False
+
+    def _update_degrees_and_violations(self, spanning_tree):
+        """Update only degrees and constraint violations."""
+        # Update degrees
+        self.degrees = dict(spanning_tree.degree())
+
+        # Recalculate constraint violations
+        old_violations = self.constraint_violations
+        self.constraint_violations = 0
+
+        if self.max_children != float('inf'):
+            for node in spanning_tree.nodes():
+                node_degree = self.degrees[node]
+                children_count = 0
+
+                for neighbor in spanning_tree.neighbors(node):
+                    if self.degrees[neighbor] < node_degree:
+                        children_count += 1
+
+                if children_count > self.max_children:
+                    self.constraint_violations += children_count - self.max_children
+
+        # Update total cost
+        violation_delta = (self.constraint_violations - old_violations) * self.penalty
+        self.current_cost = self.edge_weights_sum + (self.penalty * self.constraint_violations)
+
+# GPU acceleration functions completely removed for system stability
+# All cost calculations now use the optimized CPU-only implementation above
+
+#==============================================================================
+#                           4.1. FUNZIONI DI PARALLELIZZAZIONE
+#==============================================================================
+
+def parallel_cost_evaluation(candidate_solutions, max_children, penalty, cost_function, max_workers=None):
+    """
+    Evaluate costs of multiple candidate solutions in parallel using adaptive resource management.
+    GPU acceleration has been completely removed for system stability.
+
+    Args:
+        candidate_solutions: List of spanning trees to evaluate
+        max_children: Maximum allowed number of children
+        penalty: Penalty for violations
+        cost_function: Cost calculation function to use (calculate_cost_local, calculate_cost_sa, etc.)
+        max_workers: Maximum number of worker processes (default: adaptive calculation)
+
+    Returns:
+        List of costs corresponding to each candidate solution
+    """
+    if len(candidate_solutions) <= 1:
+        # Skip parallelization for single candidates
+        if candidate_solutions:
+            return [cost_function(candidate_solutions[0], max_children, penalty)]
+        return []
+
+    # GPU acceleration completely removed for system stability
+
+    # Use adaptive resource management for worker calculation
+    if max_workers is None:
+        max_workers = calculate_optimal_workers(safety_margin=0.5, min_ram_per_worker=MIN_RAM_PER_WORKER)
+
+    # ADAPTIVE SCALING: Use operation-specific limits based on system type
+    max_workers = get_adaptive_max_workers_for_operation("cost_eval", max_workers)
+
+    # Monitor CPU and adjust workers if needed (more aggressive threshold)
+    max_workers = adaptive_worker_adjustment(max_workers, cpu_threshold=80.0)
+
+    # Skip parallelization if only 1 worker is optimal
+    if max_workers == 1:
+        logging.info("Using sequential evaluation due to resource constraints")
+        return [cost_function(candidate, max_children, penalty) for candidate in candidate_solutions]
+
+    try:
+        # Check system stability before starting intensive parallel operations
+        is_stable, stability_message = check_system_stability()
+        if not is_stable:
+            logging.warning(f"System instability detected: {stability_message}. Reducing parallelization.")
+            max_workers = 1
+
+        # Calculate adaptive timeout based on problem size
+        adaptive_timeout = min(60, max(10, len(candidate_solutions) * 2))  # 2 seconds per candidate, max 60s
+
+        # OPTIMIZATION: Reduced logging frequency to minimize overhead
+        if len(candidate_solutions) > 20:  # Only log for larger operations
+            logging.debug(f"Starting parallel cost evaluation with {max_workers} workers for {len(candidate_solutions)} candidates (timeout: {adaptive_timeout}s)")
+
+        with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+            # Submit all cost evaluation tasks (CPU-only)
+            futures = [
+                executor.submit(cost_function, candidate, max_children, penalty)
+                for candidate in candidate_solutions
+            ]
+
+            # Collect results as they complete with adaptive timeout and monitoring
+            results = []
+            completed_count = 0
+            start_time = time.time()
+
+            for future in concurrent.futures.as_completed(futures, timeout=adaptive_timeout):
+                try:
+                    result = future.result(timeout=5)  # Individual task timeout
+                    results.append(result)
+                    completed_count += 1
+
+                    # OPTIMIZATION: Reduced frequency of system monitoring to minimize overhead
+                    if completed_count % max(1, len(futures) // 2) == 0:  # Reduced from //4 to //2
+                        cpu_usage = monitor_cpu_usage()
+                        elapsed_time = time.time() - start_time
+
+                        # OPTIMIZATION: Only check for critical CPU usage to reduce overhead
+                        if cpu_usage > 98.0:  # Increased threshold from 95.0 to 98.0
+                            logging.debug(f"Critical CPU usage detected ({cpu_usage:.1f}%) during parallel evaluation")
+                            # Consider emergency cleanup only for critical CPU usage
+                            emergency_resource_cleanup()
+
+                        # Check if we're taking too long (less verbose logging)
+                        if elapsed_time > adaptive_timeout * 0.9:  # Increased threshold from 0.8 to 0.9
+                            logging.debug(f"Parallel evaluation taking longer than expected ({elapsed_time:.1f}s)")
+
+                except concurrent.futures.TimeoutError:
+                    logging.warning(f"Individual task timed out during parallel cost evaluation")
+                    results.append(float('inf'))
+                except Exception as e:
+                    logging.warning(f"Parallel cost evaluation failed for one candidate: {e}")
+                    # Fallback to sequential calculation for this candidate
+                    results.append(float('inf'))
+
+            return results
+
+    except concurrent.futures.TimeoutError:
+        logging.warning("Parallel cost evaluation timed out. Falling back to sequential evaluation.")
+        return [cost_function(candidate, max_children, penalty) for candidate in candidate_solutions]
+    except Exception as e:
+        logging.warning(f"ProcessPoolExecutor failed: {e}. Falling back to sequential evaluation.")
+        # Fallback to sequential evaluation (CPU-only)
+        return [cost_function(candidate, max_children, penalty) for candidate in candidate_solutions]
+
+def parallel_edge_swap_evaluation(G, current_tree, edge_candidates, max_children, penalty, max_workers=None):
+    """
+    Evaluate multiple edge swap candidates in parallel with adaptive resource management.
+
+    Args:
+        G: Original graph
+        current_tree: Current spanning tree
+        edge_candidates: List of (edge_to_remove, edge_to_add) tuples
+        max_children: Maximum allowed number of children
+        penalty: Penalty for violations
+        max_workers: Maximum number of worker processes (default: adaptive calculation)
+
+    Returns:
+        List of (cost, modified_tree) tuples for valid swaps, None for invalid swaps
+    """
+    if len(edge_candidates) <= 1:
+        # Skip parallelization for single candidates
+        if edge_candidates:
+            return [_evaluate_single_edge_swap(G, current_tree, edge_candidates[0], max_children, penalty)]
+        return []
+
+    # Use adaptive resource management for worker calculation
+    if max_workers is None:
+        max_workers = calculate_optimal_workers(safety_margin=0.5, min_ram_per_worker=MIN_RAM_PER_WORKER)
+        max_workers = min(max_workers, len(edge_candidates))  # Don't exceed number of candidates
+
+    # ADAPTIVE SCALING: Use operation-specific limits based on system type
+    max_workers = get_adaptive_max_workers_for_operation("edge_swap", max_workers)
+
+    # Monitor CPU and adjust workers if needed (more aggressive threshold)
+    max_workers = adaptive_worker_adjustment(max_workers, cpu_threshold=75.0)
+
+    # Skip parallelization if only 1 worker is optimal or very few candidates
+    if max_workers == 1 or len(edge_candidates) < 5:  # Increased threshold for parallelization
+        logging.debug("Using sequential edge swap evaluation due to resource constraints or few candidates")
+        return [_evaluate_single_edge_swap(G, current_tree, candidate, max_children, penalty)
+                for candidate in edge_candidates]
+
+    try:
+        # Check system stability before starting intensive parallel operations
+        is_stable, stability_message = check_system_stability()
+        if not is_stable:
+            logging.warning(f"System instability detected: {stability_message}. Reducing parallelization.")
+            max_workers = 1
+
+        # Calculate adaptive timeout based on problem size and complexity
+        adaptive_timeout = min(40, max(8, len(edge_candidates) * 1.5))  # 1.5 seconds per candidate, max 40s
+
+        logging.debug(f"Starting parallel edge swap evaluation with {max_workers} workers for {len(edge_candidates)} candidates (timeout: {adaptive_timeout}s)")
+
+        with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+            # Submit all edge swap evaluation tasks
+            futures = [
+                executor.submit(_evaluate_single_edge_swap, G, current_tree.copy(), candidate, max_children, penalty)
+                for candidate in edge_candidates
+            ]
+
+            # Collect results as they complete with adaptive timeout and monitoring
+            results = []
+            completed_count = 0
+            start_time = time.time()
+
+            for future in concurrent.futures.as_completed(futures, timeout=adaptive_timeout):
+                try:
+                    result = future.result(timeout=3)  # Individual task timeout
+                    results.append(result)
+                    completed_count += 1
+
+                    # Monitor system resources periodically during execution
+                    if completed_count % max(1, len(futures) // 3) == 0:
+                        cpu_usage = monitor_cpu_usage()
+                        elapsed_time = time.time() - start_time
+
+                        if cpu_usage > 95.0:
+                            logging.warning(f"Very high CPU usage detected ({cpu_usage:.1f}%) during edge swap evaluation")
+                            # Consider emergency cleanup if CPU usage is critical
+                            if cpu_usage > 98.0:
+                                emergency_resource_cleanup()
+
+                        # Check if we're taking too long
+                        if elapsed_time > adaptive_timeout * 0.8:
+                            logging.warning(f"Edge swap evaluation taking longer than expected ({elapsed_time:.1f}s)")
+
+                except concurrent.futures.TimeoutError:
+                    logging.warning(f"Individual edge swap task timed out")
+                    results.append(None)
+                except Exception as e:
+                    logging.warning(f"Parallel edge swap evaluation failed for one candidate: {e}")
+                    results.append(None)
+
+            return results
+
+    except concurrent.futures.TimeoutError:
+        logging.warning("Parallel edge swap evaluation timed out. Falling back to sequential evaluation.")
+        return [_evaluate_single_edge_swap(G, current_tree, candidate, max_children, penalty)
+                for candidate in edge_candidates]
+    except Exception as e:
+        logging.warning(f"ProcessPoolExecutor failed: {e}. Falling back to sequential evaluation.")
+        # Fallback to sequential evaluation
+        return [_evaluate_single_edge_swap(G, current_tree, candidate, max_children, penalty)
+                for candidate in edge_candidates]
+
+def _evaluate_single_edge_swap(G, tree, edge_candidate, max_children, penalty):
+    """
+    Helper function to evaluate a single edge swap.
+
+    Args:
+        G: Original graph
+        tree: Spanning tree (will be modified)
+        edge_candidate: (edge_to_remove, edge_to_add) tuple
+        max_children: Maximum allowed number of children
+        penalty: Penalty for violations
+
+    Returns:
+        (cost, modified_tree) tuple if swap is valid, None otherwise
+    """
+    edge_to_remove, edge_to_add = edge_candidate
+
+    try:
+        # CRITICAL FIX: Create a deep copy to avoid modifying the original tree
+        temp_tree = tree.copy()
+
+        # Verify edge_to_remove exists in the tree before attempting removal
+        if not temp_tree.has_edge(*edge_to_remove):
+            logging.debug(f"Edge {edge_to_remove} not found in tree during swap evaluation")
+            return None
+
+        # Verify edge_to_add exists in the original graph
+        if not G.has_edge(*edge_to_add):
+            logging.debug(f"Edge {edge_to_add} not found in original graph")
+            return None
+
+        # Apply the edge swap on the copy using safe weight access
+        temp_tree.remove_edge(*edge_to_remove)
+        # FIXED: Use safe weight access to prevent KeyError
+        edge_weight = safe_get_edge_weight(G, edge_to_add[0], edge_to_add[1], default_weight=1)
+        temp_tree.add_edge(*edge_to_add, weight=edge_weight)
+
+        # Verify that the new structure is still a valid tree
+        if nx.is_connected(temp_tree) and nx.is_tree(temp_tree):
+            cost = calculate_cost_local(temp_tree, max_children, penalty)
+            return (cost, temp_tree)
+        else:
+            return None
+
+    except KeyError as e:
+        logging.debug(f"KeyError in edge swap evaluation: {e}")
+        return None
+    except Exception as e:
+        logging.debug(f"Exception in edge swap evaluation: {e}")
+        return None
+
+def validate_solution(graph, solution):
+    """Validate that a solution forms a valid spanning tree"""
+    edges = solution['edges']
+
+    # Crea un grafo da soluzione
+    solution_graph = nx.Graph()
+    solution_graph.add_nodes_from(graph.nodes())
+    solution_graph.add_edges_from(edges)
+
+    # Controlla se l'albero è connesso e senza cicli
+    is_connected = nx.is_connected(solution_graph)
+    is_tree = is_connected and len(edges) == len(graph.nodes()) - 1
+
+    return is_tree
+
+def evaluate_solution(solution: Dict[str, Any], constraints: Dict[str, Any]) -> float:
+    """
+    Valutare la qualità di una soluzione.
+
+    Questa è una funzione segnaposto: implementala in base ai tuoi obiettivi di ottimizzazione specifici.
+    """
+    score = 0.0
+    # Implementa qui la logica di valutazione della soluzione
+    # Un punteggio più alto indica una soluzione migliore
+
+    # Esempio: valutazione in base all'efficienza dell'utilizzo della memoria
+    if "memory_usage" in solution and "target_memory" in constraints:
+        efficiency = min(solution["memory_usage"] / constraints["target_memory"], 1.0)
+        score += efficiency * 100
+
+    return score
+
+def is_dcst(_, tree_edges, degree_constraints):
+    """
+    Controlla se il dato insieme di bordi forma un albero ricoprente con vincoli di grado (DCST) valido.
+
+    Parametri:
+    - grafico: la rappresentazione grafica completa (nodi e tutti i possibili spigoli)
+    - tree_edges: elenco di bordi che formano il potenziale DCST
+    - Degree_constraints: dizionario che mappa i nodi al loro grado massimo consentito
+
+    Resi:
+    - bool: Vero se l'albero è un DCST valido, Falso altrimenti
+    """
+    # Controlla se forma un albero (connesso e senza cicli)
+    nodes = set()
+    for edge in tree_edges:
+        u, v = edge[0], edge[1]
+        nodes.add(u)
+        nodes.add(v)
+
+    # Un albero con n nodi deve avere esattamente n-1 spigoli
+    if len(tree_edges) != len(nodes) - 1:
+        return False
+
+    # Controlla se l'albero è connesso
+    # Utilizzo di DFS semplice per verificare la connettività
+    visited = set()
+    if nodes:
+        start_node = next(iter(nodes))
+
+        # Costruisce la lista delle adiacenze per l'albero
+        adjacency = {node: [] for node in nodes}
+        for u, v in tree_edges:
+            adjacency[u].append(v)
+            adjacency[v].append(u)
+
+        def dfs(node):
+            visited.add(node)
+            for neighbor in adjacency[node]:
+                if neighbor not in visited:
+                    dfs(neighbor)
+
+        dfs(start_node)
+
+        if len(visited) != len(nodes):
+            return False
+
+    # Controlla i vincoli di grado
+    node_degrees = {node: 0 for node in nodes}
+    for u, v in tree_edges:
+        node_degrees[u] += 1
+        node_degrees[v] += 1
+
+    for node, degree in node_degrees.items():
+        if node in degree_constraints and degree > degree_constraints[node]:
+            return False
+
+    return True
+
+
+
+#==============================================================================
+#                           5. ALGORITMI PRINCIPALI
+#==============================================================================
+
+def greedy_spanning_tree(G, max_children=float('inf'), penalty=1000):
+    """
+    Genera un albero di copertura usando un algoritmo greedy modificato.
+
+    Parameters:
+    - G: Grafo da cui generare l'albero
+    - max_children: Limite superiore per il numero di figli dei nodi nell'albero
+    - penalty: Penalizzazione per le aree che violano il limite di figli
+
+    Returns:
+    - T: Albero di copertura generato
+    """
+    global greedy_cost_calls
+    greedy_cost_calls[0] += 1
+
+    if not G:
+        return nx.Graph()
+
+    # Inizializza un albero vuoto e traccia i gradi dei nodi
+    T = nx.Graph()
+    T.add_nodes_from(G.nodes())
+    children_count = {node: 0 for node in G.nodes()}
+
+    # Inizia con un nodo casuale (o il primo)
+    nodes = list(G.nodes())
+    start_node = nodes[0]
+
+    # Tieni traccia dei bordi da considerare
+    candidate_edges = []
+    visited = {start_node}
+
+    # Aggiungi tutti i bordi dal nodo iniziale all'elenco dei candidati
+    for neighbor, edge_data in G[start_node].items():
+        weight = edge_data.get('weight', 1)
+        heapq.heappush(candidate_edges, (weight, start_node, neighbor))
+
+    # Fai crescere l'albero usando l'algoritmo di Prim modificato
+    while candidate_edges and len(visited) < len(G.nodes()):
+        weight, u, v = heapq.heappop(candidate_edges)
+
+        # Salta se entrambi i nodi sono già nell'albero
+        if v in visited:
+            continue
+
+        # Controlla se aggiungere l'arco viola i vincoli sui figli
+        children_u = [child for child in T.neighbors(u) if T.degree(child) < T.degree(u)]
+        children_v = [child for child in T.neighbors(v) if T.degree(child) < T.degree(v)]
+
+        if len(children_u) < max_children and len(children_v) < max_children:
+            # Aggiungi l'arco all'albero
+            weight = safe_get_edge_weight(G, u, v, default_weight=1)
+            T.add_edge(u, v, weight=weight)
+            children_count[u] += 1
+            children_count[v] += 1
+            visited.add(v)
+
+            # Aggiungi un nuovo nodo ai candidati
+            for neighbor, edge_data in G[v].items():
+                if neighbor not in visited:
+                    weight = edge_data.get('weight', 1)
+                    heapq.heappush(candidate_edges, (weight, v, neighbor))
+
+    # Calcola il costo totale utilizzando la funzione calcola_costo aggiornata
+    total_cost = calculate_cost_greedy(T, max_children, penalty)
+    return T, total_cost
+
+def adaptive_neighborhood_local_search(G, initial_tree, max_children, penalty, max_iterations=5000, stop_event=None, queue=None, callback=None):
+    # ENHANCED: Automatic parameter adaptation for large instances with adaptive thresholds
+    num_nodes = len(G.nodes)
+    original_max_iterations = max_iterations
+    original_neighborhood_size = 1
+
+    # IMPROVEMENT: Calculate adaptive thresholds based on graph size and max_iterations
+    def calculate_adaptive_thresholds(num_nodes, max_iterations):
+        """
+        Calculate adaptive thresholds for iterations without improvement based on graph size.
+
+        Approach:
+        - Calculate thresholds as percentages of max_iterations
+        - Increase tolerance progressively for larger instances
+        - Maintain minimum thresholds for small instances to preserve efficiency
+        """
+        # OPTIMIZATION: More aggressive thresholds for faster early stopping
+        if num_nodes < 50:
+            # Small graphs: very aggressive early stopping
+            neighborhood_threshold = 5   # reduced from 10
+            reset_threshold = 10          # reduced from 20
+            termination_threshold = 15    # reduced from 30
+        elif num_nodes < 100:
+            # Medium graphs: aggressive early stopping
+            neighborhood_threshold = max(5, int(max_iterations * 0.005))   # 0.5% (reduced from 0.8%)
+            reset_threshold = max(10, int(max_iterations * 0.010))         # 1.0% (reduced from 1.5%)
+            termination_threshold = max(20, int(max_iterations * 0.015))   # 1.5% (reduced from 2.5%)
+        elif num_nodes < 200:
+            # Large graphs: moderate early stopping
+            neighborhood_threshold = max(8, int(max_iterations * 0.008))   # 0.8% (reduced from 1.2%)
+            reset_threshold = max(20, int(max_iterations * 0.015))         # 1.5% (reduced from 2.5%)
+            termination_threshold = max(35, int(max_iterations * 0.025))   # 2.5% (reduced from 4.0%)
+        else:
+            # Very large graphs: still adaptive but more aggressive
+            neighborhood_threshold = max(12, int(max_iterations * 0.010))  # 1.0% (reduced from 1.5%)
+            reset_threshold = max(25, int(max_iterations * 0.020))         # 2.0% (reduced from 3.5%)
+            termination_threshold = max(50, int(max_iterations * 0.035))   # 3.5% (reduced from 6.0%)
+
+        # Ensure logical ordering: neighborhood < reset < termination
+        reset_threshold = max(reset_threshold, neighborhood_threshold + 5)
+        termination_threshold = max(termination_threshold, reset_threshold + 10)
+
+        return neighborhood_threshold, reset_threshold, termination_threshold
+
+    if num_nodes >= 1000:
+        # Increase max_iterations to handle larger search spaces
+        max_iterations = max(max_iterations * 2, 10000)  # At least double, minimum 10000
+        max_iterations = min(max_iterations, 20000)  # Cap at 20000 to prevent excessive computation
+
+        # Reduce neighborhood_size to 1 to limit computational complexity
+        initial_neighborhood_size = 1
+
+        # Log warning about parameter adaptation
+        warning_msg = (f"Large instance detected ({num_nodes} nodes). "
+                      f"Adapting Local Search parameters: "
+                      f"max_iterations: {original_max_iterations} → {max_iterations}, "
+                      f"neighborhood_size: {original_neighborhood_size} → {initial_neighborhood_size}")
+        logging.warning(warning_msg)
+
+        if queue:
+            queue.put(("log", (warning_msg, "warning")))
+    else:
+        initial_neighborhood_size = 1
+
+    # IMPROVEMENT: Calculate adaptive thresholds for this instance
+    neighborhood_threshold, reset_threshold, termination_threshold = calculate_adaptive_thresholds(num_nodes, max_iterations)
+
+    # Log adaptive thresholds for transparency
+    thresholds_msg = (f"Adaptive thresholds for {num_nodes} nodes: "
+                     f"neighborhood={neighborhood_threshold}, "
+                     f"reset={reset_threshold}, "
+                     f"termination={termination_threshold}")
+    logging.info(thresholds_msg)
+
+    if queue:
+        queue.put(("log", (thresholds_msg, "info")))
+
+    current_tree = initial_tree.copy()
+    best_tree = current_tree.copy()
+    best_cost = calculate_cost_local(best_tree, max_children, penalty)
+
+    # Imposta la dimensione iniziale del quartiere
+    neighborhood_size = initial_neighborhood_size
+    iterations_without_improvement = 0
+
+    cost_calls = local_search_cost_calls[0]  # Manteniamo il valore del contatore
+
+    # Inizializza lo storico dei punteggi per il grafico temporale
+    score_history = []
+    start_time = time.time()
+
+    for iteration in range(max_iterations):
+        if stop_event and stop_event.is_set():
+            break
+
+        # Aggiorna la GUI se la coda esiste
+        if queue and iteration % 10 == 0:
+            queue.put(("iter", f"{iteration}/{max_iterations}"))
+            queue.put(("cost", best_cost))
+
+        # Se viene fornita una richiamata, utilizzala per segnalare l'avanzamento
+        if callback:
+            improved = False
+            if iteration % 5 == 0:  # Report ogni 5 iterazioni
+                message = f"Iteration {iteration}/{max_iterations}"
+                callback(message, best_cost, queue=queue, improved=improved)
+
+        # Raccoglie dati dettagliati ogni 5 iterazioni per il grafico temporale
+        if iteration % 5 == 0:
+            violations = count_constraint_violations(current_tree, max_children)
+            current_time = time.time() - start_time
+            current_cost = calculate_cost_local(current_tree, max_children, penalty)
+
+            # Salva dati completi per normalizzazione successiva
+            score_data = {
+                "cost": current_cost,
+                "execution_time": current_time,
+                "memory": 0,  # Placeholder per la memoria
+                "violations": violations
+            }
+            score_history.append((iteration, score_data))
+
+        # Trova i nodi che violano i vincoli di grado
+        constrained_nodes = get_violating_nodes(current_tree, max_children)
+
+        if not constrained_nodes:
+            # Se nessun vincolo viene violato, prova gli scambi casuali per migliorare i costi
+            improvement_made = try_random_edge_swap(G, current_tree, max_children, penalty, neighborhood_size)
+            cost_calls += neighborhood_size * 2  # Ogni tentativo di scambio valuta almeno 2 stati, moltiplicato per neighborhood_size
+            if not improvement_made:
+                iterations_without_improvement += 1
+            else:
+                iterations_without_improvement = 0
+                if callback:
+                    callback(iteration, best_cost, queue=queue, improved=True)
+        else:
+            # Prova a correggere le violazioni dei vincoli con tentativi multipli
+            improvement_made = fix_constraint_violations(G, current_tree, constrained_nodes, max_children, penalty, neighborhood_size)
+            cost_calls += neighborhood_size * len(constrained_nodes) * 2  # Ogni tentativo per nodo valuta almeno 2 stati
+            if not improvement_made:
+                iterations_without_improvement += 1
+            else:
+                iterations_without_improvement = 0
+
+        # Calcola il costo attuale
+        current_cost = calculate_cost_local(current_tree, max_children, penalty)
+        cost_calls += 1
+
+        # Aggiorna la soluzione migliore se migliore
+        if current_cost < best_cost:
+            best_tree = current_tree.copy()
+            best_cost = current_cost
+            iterations_without_improvement = 0
+            if callback:
+                callback(iteration, best_cost, queue=queue, improved=True)
+
+        # IMPROVEMENT: Use adaptive thresholds instead of fixed values
+        # Adattare le dimensioni del quartiere in base ai progressi
+        if iterations_without_improvement > neighborhood_threshold:
+            neighborhood_size = min(neighborhood_size + 1, 5)  # Incrementa gradualmente fino a 5 nodi
+        elif iterations_without_improvement > reset_threshold:
+            # Se bloccato, prova a ridurre le dimensioni dell'intorno
+            current_tree = best_tree.copy()
+            neighborhood_size = 1
+            iterations_without_improvement = 0
+
+        # IMPROVEMENT: Use adaptive termination threshold
+        # Condizione di arresto anticipato
+        if iterations_without_improvement > termination_threshold:
+            if queue:
+                queue.put(("log", (f"Local Search terminated: {iterations_without_improvement} iterations without improvement (threshold: {termination_threshold})", "info")))
+            break
+
+    # Report finale
+    if queue:
+        queue.put(("log", (f"Local Search completata: {iteration+1} iterazioni, {cost_calls} chiamate alla funzione di costo", "info")))
+
+    local_search_cost_calls[0] = cost_calls
+
+    return best_tree, cost_calls, score_history
+
+def simulated_annealing_spanning_tree(G, max_children=3, penalty=1000, max_iterations=10000, initial_temperature=200, cooling_rate=0.98, stop_event=None, queue=None, return_stats=False, initial_tree=None, progress_callback=None, greedy_tree=None):
+    """
+    Enhanced Simulated Annealing algorithm for finding optimal degree-constrained spanning trees.
+    Uses adaptive cooling/reheating and improved neighbor generation strategies.
+
+    ENHANCEMENT: Now intelligently selects the best starting solution from available options:
+    - Compares local search result vs greedy result when both are provided
+    - Always starts from the solution with the lowest cost
+    - Ensures optimal initialization for better convergence
+
+    Args:
+        G (networkx.Graph): Input graph
+        max_children (int): Maximum number of children per node
+        penalty (int): Penalty value for constraint violations
+        max_iterations (int): Maximum number of iterations
+        initial_temperature (float): Initial temperature
+        cooling_rate (float): Rate at which temperature decreases
+        stop_event (threading.Event): Event to signal algorithm termination
+        queue (queue.Queue): Queue for GUI communication
+        return_stats (bool): Whether to return detailed statistics
+        initial_tree (networkx.Graph): Initial tree (usually from local search)
+        progress_callback: Callback for progress updates
+        greedy_tree (networkx.Graph): Greedy solution tree for comparison
+
+    Returns:
+        tuple or networkx.Graph: Resulting spanning tree and optionally statistics
+    """
+
+    # CORRECTED: Improved parameter adaptation for large instances
+    num_nodes = len(G.nodes)
+    original_max_iterations = max_iterations
+    original_cooling_rate = cooling_rate
+    original_min_temperature = 0.01  # Default value from the original code
+
+    # CORRECTION 1: Fix insufficient iterations for large instances
+    # Scale iterations proportionally with graph size for better convergence
+    if num_nodes >= 50:
+        # Dynamic iteration scaling based on graph size
+        if num_nodes >= 200:
+            # Very large graphs: significant increase in iterations
+            iteration_multiplier = min(3.0, 1.0 + (num_nodes - 200) / 200)
+            max_iterations = int(max_iterations * iteration_multiplier)
+            max_iterations = min(max_iterations, 25000)  # Cap at 25k for very large instances
+        elif num_nodes >= 100:
+            # Large graphs: moderate increase in iterations
+            iteration_multiplier = 1.5 + (num_nodes - 100) / 200
+            max_iterations = int(max_iterations * iteration_multiplier)
+            max_iterations = min(max_iterations, 20000)  # Cap at 20k
+        else:  # 50-99 nodes
+            # Medium graphs: modest increase in iterations
+            iteration_multiplier = 1.2 + (num_nodes - 50) / 100
+            max_iterations = int(max_iterations * iteration_multiplier)
+            max_iterations = min(max_iterations, 15000)  # Cap at 15k
+
+        # Ensure minimum iteration thresholds for different graph size categories
+        if num_nodes >= 200:
+            max_iterations = max(max_iterations, 15000)  # Minimum 15k for very large
+        elif num_nodes >= 100:
+            max_iterations = max(max_iterations, 12000)  # Minimum 12k for large
+        else:  # 50-99 nodes
+            max_iterations = max(max_iterations, 8000)   # Minimum 8k for medium
+
+    # CORRECTION 2: Fix cooling rate issues for large problems
+    # Implement adaptive cooling rate based on graph size with staged cooling
+    if num_nodes >= 50:
+        # For large graphs, use slower initial cooling rate for better exploration
+        if num_nodes >= 200:
+            cooling_rate = 0.998  # Very slow cooling for very large graphs
+        elif num_nodes >= 100:
+            cooling_rate = 0.996  # Slow cooling for large graphs
+        else:  # 50-99 nodes
+            cooling_rate = 0.995  # Moderately slow cooling for medium graphs
+
+        # Adjust min_temperature based on graph size
+        if num_nodes >= 200:
+            adapted_min_temperature = 0.05  # Higher min temp for very large graphs
+        elif num_nodes >= 100:
+            adapted_min_temperature = 0.02  # Moderate min temp for large graphs
+        else:  # 50-99 nodes
+            adapted_min_temperature = 0.015  # Slightly higher min temp for medium graphs
+    else:
+        # Small graphs: use original parameters for maintained performance
+        adapted_min_temperature = original_min_temperature
+
+    # Log parameter adaptations for large instances
+    if num_nodes >= 50:
+        adaptation_msg = (f"Large instance optimization ({num_nodes} nodes): "
+                         f"max_iterations: {original_max_iterations} → {max_iterations}, "
+                         f"cooling_rate: {original_cooling_rate:.3f} → {cooling_rate:.3f}, "
+                         f"min_temperature: {original_min_temperature} → {adapted_min_temperature}")
+        logging.info(adaptation_msg)
+
+        if queue:
+            queue.put(("log", (adaptation_msg, "info")))
+
+    global sa_cost_calls
+    sa_cost_calls[0] += 1
+
+    # ENHANCEMENT: Start SA from the best available solution
+    # Priority: 1) initial_tree (usually local search result), 2) greedy_tree, 3) generate new greedy
+    if initial_tree is not None:
+        # Check if we also have a greedy solution to compare
+        if greedy_tree is not None:
+            initial_cost = calculate_cost_sa(initial_tree, max_children, penalty)
+            greedy_cost = calculate_cost_sa(greedy_tree, max_children, penalty)
+
+            if initial_cost <= greedy_cost:
+                T = initial_tree.copy()
+                if queue:
+                    queue.put(("log", (f"🎯 SA starting from Local Search solution (cost: {initial_cost:.2f}) - better than Greedy (cost: {greedy_cost:.2f})", "info")))
+            else:
+                T = greedy_tree.copy()
+                if queue:
+                    queue.put(("log", (f"🎯 SA starting from Greedy solution (cost: {greedy_cost:.2f}) - better than Local Search (cost: {initial_cost:.2f})", "info")))
+        else:
+            T = initial_tree.copy()
+            if queue:
+                queue.put(("log", (f"🎯 SA starting from provided initial solution (Local Search)", "info")))
+    elif greedy_tree is not None:
+        T = greedy_tree.copy()
+        if queue:
+            queue.put(("log", (f"🎯 SA starting from provided Greedy solution", "info")))
+    else:
+        # Generate new greedy solution as fallback
+        T, _ = greedy_spanning_tree(G, max_children=max_children, penalty=penalty)
+        if queue:
+            queue.put(("log", (f"🎯 SA starting from newly generated Greedy solution", "info")))
+
+    # Calcola le chimate alla funzione di costo iniziale
+    cost = calculate_cost_sa(T, max_children, penalty)
+    sa_cost_calls[0] += 1
+    best_cost = cost
+    best_tree = T.copy()
+
+    # Parametri di ricottura simulata migliorati
+    temperature = initial_temperature
+    min_temperature = adapted_min_temperature  # Use adapted value for large instances
+    iteration = 0
+    accepted_count = 0
+    rejected_count = 0
+    plateau_count = 0
+
+    # Parametri per il raffreddamento adattivo
+    alpha = cooling_rate  # Velocità di raffreddamento iniziale
+    adaptive_cooling = True
+
+    # Parametri di riscaldamento
+    reheating_factor = 1.5
+    max_reheats = 3
+    reheat_count = 0
+
+    # CORRECTED: Enhanced multi-stage cooling with adaptive rates for large instances
+    stage = 1
+    stage_lengths = {
+        1: max_iterations // 3,       # Exploration stage (high temperature)
+        2: max_iterations // 3,       # Transition stage (medium temperature)
+        3: max_iterations // 3        # Exploitation stage (low temperature)
+    }
+
+    # CORRECTION: Staged cooling rates adapted for large instances
+    if num_nodes >= 50:
+        # For large graphs, implement more gradual staged cooling
+        stage_cooling_rates = {
+            1: cooling_rate,                    # Use adapted cooling rate in exploration
+            2: cooling_rate * 0.999,            # Very slightly slower in transition
+            3: cooling_rate * 0.998             # Slightly slower in exploitation
+        }
+    else:
+        # Small graphs: use original staged cooling strategy
+        stage_cooling_rates = {
+            1: cooling_rate,              # Normal cooling in exploration
+            2: cooling_rate * 0.98,       # Slower cooling in transition
+            3: cooling_rate * 0.95        # Even slower cooling in exploitation
+        }
+
+    # Cronologia delle soluzioni per il rilevamento dei plateau
+    cost_history = []
+    best_cost_history = []
+
+    # Inizializza lo storico dei punteggi per il grafico temporale
+    score_history = []
+    start_time = time.time()
+
+    while temperature > min_temperature and iteration < max_iterations:
+        # Controlla se l'algoritmo deve essere interrotto
+        if stop_event and stop_event.is_set():
+            break
+
+        # Aggiorna la GUI periodicamente data la coda
+        if queue and iteration % 10 == 0:
+            queue.put(("temperature", round(temperature, 2)))
+            queue.put(("iteration", iteration))
+            queue.put(("cost", cost))
+            queue.put(("accepted", accepted_count))
+            queue.put(("plateau", plateau_count))
+            queue.put(("reheats", reheat_count))
+
+        # Raccoglie dati dettagliati ogni 10 iterazioni per il grafico temporale
+        if iteration % 10 == 0:
+            violations = count_constraint_violations(T, max_children)
+            current_time = time.time() - start_time
+
+            # Salva dati completi per normalizzazione successiva
+            score_data = {
+                "cost": cost,
+                "execution_time": current_time,
+                "memory": 0,  # Placeholder per la memoria
+                "violations": violations
+            }
+            score_history.append((iteration, score_data))
+
+        # Determinare la fase corrente in base al conteggio delle iterazioni
+        current_iter_stage = 1
+        iter_count = 0
+        for s, length in stage_lengths.items():
+            iter_count += length
+            if iteration < iter_count:
+                current_iter_stage = s
+                break
+
+        # Regola i parametri in base alla fase corrente
+        if current_iter_stage != stage:
+            stage = current_iter_stage
+            alpha = stage_cooling_rates[stage]
+
+        # Genera una soluzione vicina di qualità superiore utilizzando una strategia avanzata
+        # Use adaptive parallel neighbor generation for large graphs and high temperatures
+        if num_nodes > 100 and temperature > initial_temperature * 0.5 and iteration % 10 == 0:
+            # Generate multiple neighbors in parallel and select the best one
+            try:
+                # Use adaptive resource management for neighbor generation
+                optimal_workers = calculate_optimal_workers(safety_margin=0.8, min_ram_per_worker=0.2)
+                num_neighbors = min(optimal_workers, 4, num_nodes // 50)  # Adaptive neighbor count
+
+                # Monitor CPU and adjust if needed
+                current_cpu = monitor_cpu_usage()
+                if current_cpu > 85.0:
+                    num_neighbors = max(1, num_neighbors // 2)  # Reduce neighbors if CPU is high
+                    logging.debug(f"Reducing neighbor candidates to {num_neighbors} due to high CPU usage ({current_cpu:.1f}%)")
+
+                neighbor_candidates = []
+
+                for _ in range(num_neighbors):
+                    candidate = T.copy()
+                    strategy_prob = temperature / initial_temperature
+
+                    if random.random() < strategy_prob:
+                        generate_neighbor_tree(G, candidate, max_children, penalty)
+                    else:
+                        _generate_targeted_neighbor(G, candidate, max_children, penalty)
+
+                    neighbor_candidates.append(candidate)
+
+                # Evaluate all candidates in parallel (GPU acceleration removed for stability)
+                costs = parallel_cost_evaluation(neighbor_candidates, max_children, penalty, calculate_cost_sa)
+
+                # Select the best neighbor
+                best_idx = min(range(len(costs)), key=lambda i: costs[i])
+                neighbor_tree = neighbor_candidates[best_idx]
+                neighbor_cost = costs[best_idx]
+
+                sa_cost_calls[0] += len(neighbor_candidates)  # Update counter for all evaluations
+
+            except Exception as e:
+                logging.warning(f"Parallel neighbor generation failed, falling back to sequential: {e}")
+                # Fallback to sequential neighbor generation
+                neighbor_tree = T.copy()
+                strategy_prob = temperature / initial_temperature
+
+                if random.random() < strategy_prob:
+                    generate_neighbor_tree(G, neighbor_tree, max_children, penalty)
+                else:
+                    _generate_targeted_neighbor(G, neighbor_tree, max_children, penalty)
+
+                neighbor_cost = calculate_cost_sa(neighbor_tree, max_children, penalty)
+                sa_cost_calls[0] += 1
+        else:
+            # Sequential neighbor generation (default)
+            neighbor_tree = T.copy()
+            strategy_prob = temperature / initial_temperature
+
+            if random.random() < strategy_prob:
+                generate_neighbor_tree(G, neighbor_tree, max_children, penalty)
+            else:
+                _generate_targeted_neighbor(G, neighbor_tree, max_children, penalty)
+
+            neighbor_cost = calculate_cost_sa(neighbor_tree, max_children, penalty)
+            sa_cost_calls[0] += 1  # Update counter
+
+        # Decide whether to accept the new solution with enhanced criteria
+        delta_cost = neighbor_cost - cost
+
+        # Accept with probability based on Metropolis criterion with quality awareness
+        # For equal or better solutions, always accept
+        # For worse solutions, acceptance probability depends on how much worse and temperature
+        acceptance_prob = math.exp(-delta_cost / temperature) if delta_cost > 0 else 1.0
+
+        # At very low temperatures, also consider degree constraint violations more heavily
+        if temperature < 1.0:
+            # Count constraint violations in both current and neighbor
+            current_violations = count_constraint_violations(T, max_children)
+            neighbor_violations = count_constraint_violations(neighbor_tree, max_children)
+
+            # Adjust acceptance probability based on violation changes
+            if neighbor_violations > current_violations:
+                acceptance_prob *= 0.5  # Penalize increases in violations at low temps
+            elif neighbor_violations < current_violations:
+                acceptance_prob = min(acceptance_prob * 2.0, 1.0)  # Favor decreases
+
+        if random.random() < acceptance_prob:
+            T = neighbor_tree
+            cost = neighbor_cost
+            accepted_count += 1
+
+            # Track best solution
+            if cost < best_cost:
+                best_cost = cost
+                best_tree = T.copy()
+                plateau_count = 0
+            else:
+                plateau_count += 1
+        else:
+            rejected_count += 1
+            plateau_count += 1
+
+        # Track cost history for plateau detection
+        cost_history.append(cost)
+        best_cost_history.append(best_cost)
+        if len(cost_history) > 100:  # Keep history limited
+            cost_history.pop(0)
+            best_cost_history.pop(0)
+
+        # Adaptive cooling rate based on acceptance rate
+        if adaptive_cooling and iteration % 100 == 0 and iteration > 0:
+            recent_acceptance_rate = accepted_count / (accepted_count + rejected_count)
+
+            # Reset counters for next period
+            accepted_count = 0
+            rejected_count = 0
+
+            # Adjust cooling rate based on acceptance rate
+            if recent_acceptance_rate > 0.6:  # Too many acceptances - cool faster
+                alpha = min(alpha * 1.05, 0.99)
+            elif recent_acceptance_rate < 0.2:  # Too few acceptances - cool slower
+                alpha = max(alpha * 0.95, 0.8)
+
+        # Consider reheating if stuck in a plateau
+        if plateau_count > 200 and reheat_count < max_reheats:
+            # Check if we're in a true plateau by analyzing cost history variance
+            if len(cost_history) > 50:
+                recent_costs = cost_history[-50:]
+                cost_variance = np.var(recent_costs) if hasattr(np, 'var') else sum((c - sum(recent_costs)/len(recent_costs))**2 for c in recent_costs)/len(recent_costs)
+
+                if cost_variance < 0.001 * best_cost:  # Very small variance indicates a plateau
+                    # Reheat the system
+                    temperature = min(temperature * reheating_factor, initial_temperature * 0.5)
+                    reheat_count += 1
+                    plateau_count = 0
+
+                    # Log reheating event
+                    if queue:
+                        queue.put(("log", (f"Reheating applied (#{reheat_count}): New temperature = {temperature:.2f}", "highlight")))
+
+        # Log plateau and reheat status periodically
+        if queue and iteration % 100 == 0:
+            queue.put(("log", (f"[SA] Plateau: {plateau_count} – Reheat: {reheat_count}", "info")))
+
+        # Cool down the temperature using current adaptive rate
+        temperature *= alpha
+        iteration += 1
+
+        # Update progress callback
+        if progress_callback:
+            progress_callback(iteration, temperature, cost, accepted_count, max_iterations)
+
+        # Every 500 iterations, perform a focused improvement on the current best solution
+        if iteration % 500 == 0:
+            improved_best = best_tree.copy()
+            improved_best = _improve_tree_locally(G, improved_best, max_children, penalty)
+            improved_cost = calculate_cost_sa(improved_best, max_children, penalty)
+
+            if improved_cost < best_cost:
+                best_tree = improved_best.copy()
+                best_cost = improved_cost
+                if queue:
+                    queue.put(("log", (f"Focused improvement found better solution: {best_cost}", "success")))
+
+    # Final intensification phase: try to improve the best solution one more time
+    final_best = best_tree.copy()
+    final_best = _improve_best_solution(G, final_best, max_children, penalty)
+    final_cost = calculate_cost_sa(final_best, max_children, penalty)
+    sa_cost_calls[0] += 1  # Update counter
+
+    if final_cost < best_cost:
+        best_tree = final_best
+        best_cost = final_cost
+        if queue:
+            queue.put(("log", (f"Final intensification improved solution to: {best_cost}", "success")))
+
+    if return_stats:
+        stats = {
+            "iterations": iteration,
+            "accepted_moves": accepted_count + rejected_count,  # Total moves
+            "rejected_moves": rejected_count,
+            "final_cost": best_cost,
+            "final_temperature": temperature,
+            "reheats_applied": reheat_count
+        }
+        sa_cost_calls[0] = iteration  # Use the total number of iterations to reflect the calls
+        return best_tree, stats, score_history
+    else:
+        sa_cost_calls[0] = iteration  # Use the total number of iterations to reflect the calls
+        return best_tree, best_cost, iteration, accepted_count, score_history
+
+#==============================================================================
+#                           6. FUNZIONI DI SUPPORTO
+#==============================================================================
+def generate_neighbor_tree(G, tree, max_children, penalty):
+    """
+    Generates a neighboring solution for simulated annealing.
+
+    Args:
+        G: Original graph
+        tree: Current spanning tree
+        max_children: Maximum allowed number of children
+        penalty: Penalty for violations
+
+    Returns:
+        new_tree: A neighboring spanning tree
+    """
+    # CRITICAL FIX: Ensure tree has edges before attempting to remove one
+    if len(tree.edges()) == 0:
+        logging.warning("Tree has no edges, cannot generate neighbor")
+        return tree
+
+    # Choose a random edge to remove
+    edge_to_remove = random.choice(list(tree.edges()))
+    u, v = edge_to_remove
+
+    # CRITICAL FIX: Verify edge exists before removal
+    if not tree.has_edge(u, v):
+        logging.debug(f"Edge {edge_to_remove} not found in tree during neighbor generation")
+        return tree
+
+    try:
+        # Remove the edge
+        tree.remove_edge(u, v)
+
+        # Find the two components
+        components = list(nx.connected_components(tree))
+
+        if len(components) == 1:
+            # The removal didn't disconnect the tree, add the edge back and try again
+            if G.has_edge(u, v):
+                weight = safe_get_edge_weight(G, u, v, default_weight=1)
+                tree.add_edge(u, v, weight=weight)
+            return generate_neighbor_tree(G, tree, max_children, penalty)
+
+        # Find a new edge to connect the components
+        component1 = components[0]
+        component2 = components[1]
+    except (KeyError, nx.NetworkXError) as e:
+        logging.debug(f"Error during neighbor generation: {e}")
+        # Try to restore the original edge if possible
+        if G.has_edge(u, v):
+            weight = safe_get_edge_weight(G, u, v, default_weight=1)
+            tree.add_edge(u, v, weight=weight)
+        return tree
+
+    # Find all potential edges between the components from the original graph
+    potential_edges = []
+    for node1 in component1:
+        for node2 in component2:
+            if G.has_edge(node1, node2):
+                # Calculate the effective weight considering potential child violations
+                new_children1 = len([child for child in tree.neighbors(node1) if tree.degree(child) < tree.degree(node1)]) + 1
+                new_children2 = len([child for child in tree.neighbors(node2) if tree.degree(child) < tree.degree(node2)]) + 1
+
+                child_penalty = max(0, new_children1 - max_children) + max(0, new_children2 - max_children)
+                base_weight = safe_get_edge_weight(G, node1, node2, default_weight=1)
+                effective_weight = base_weight + (child_penalty * penalty * 0.1)
+
+                potential_edges.append((node1, node2, effective_weight))
+
+    # If no potential edges found, revert and try again
+    if not potential_edges:
+        weight = safe_get_edge_weight(G, u, v, default_weight=1)
+        tree.add_edge(u, v, weight=weight)
+        return generate_neighbor_tree(G, tree, max_children, penalty)
+
+    # Choose an edge based on weights (prefer lower weights)
+    potential_edges.sort(key=lambda x: x[2])
+
+    # Probabilistically select an edge, favoring lower weights
+    weights = [1.0/(1.0+e[2]) for e in potential_edges]
+    total = sum(weights)
+    weights = [w/total for w in weights]
+
+    chosen_edge = random.choices(potential_edges, weights=weights)[0]
+    node1, node2, _ = chosen_edge
+
+    # Add the new edge to reconnect the tree
+    weight = safe_get_edge_weight(G, node1, node2, default_weight=1)
+    tree.add_edge(node1, node2, weight=weight)
+
+    return tree
+
+def _generate_targeted_neighbor(G, tree, max_children, penalty):
+    """
+    Generates a targeted neighboring solution based on current constraints and cost analysis.
+    Prefers modifications that address child constraint violations or high-cost edges.
+    """
+    # Check for child constraint violations
+    constrained_nodes = get_violating_nodes(tree, max_children)
+
+    if constrained_nodes and random.random() < 0.7:  # 70% chance to focus on fixing constraints
+        # Pick a constrained node
+        node = random.choice(constrained_nodes)
+
+        # Get edges from this node sorted by weight (descending)
+        edges = [(node, neighbor, safe_get_edge_weight(tree, node, neighbor, default_weight=1))
+                for neighbor in tree.neighbors(node)]
+        edges.sort(key=lambda x: -x[2])  # Sort by weight, highest first
+
+        # Try to replace a high-weight edge
+        for u, v, _ in edges[:2]:  # Focus on the two highest-weight edges
+            # Remove this edge
+            tree.remove_edge(u, v)
+
+            # Check if tree is still connected
+            if not nx.is_connected(tree):
+                # Find components
+                components = list(nx.connected_components(tree))
+                comp1 = [c for c in components if u in c][0]
+                comp2 = [c for c in components if v in c][0]
+
+                # Find alternative connections that don't involve the constrained node
+                alt_edges = []
+                for n1 in comp1:
+                    if n1 == node:
+                        continue  # Skip the constrained node
+                    for n2 in comp2:
+                        if G.has_edge(n1, n2):
+                            weight = safe_get_edge_weight(G, n1, n2, default_weight=1)
+                            alt_edges.append((n1, n2, weight))
+
+                if alt_edges:
+                    # Sort by weight
+                    alt_edges.sort(key=lambda x: x[2])
+
+                    # Pick one of the best alternatives with some randomness
+                    idx = min(int(random.expovariate(1) * len(alt_edges)), len(alt_edges) - 1)
+                    n1, n2, _ = alt_edges[idx]
+                    weight = safe_get_edge_weight(G, n1, n2, default_weight=1)
+                    tree.add_edge(n1, n2, weight=weight)
+                    return tree  # Successfully modified
+                else:
+                    # No alternative found, put back the original edge
+                    weight = safe_get_edge_weight(G, u, v, default_weight=1)
+                    tree.add_edge(u, v, weight=weight)
+
+    # If we get here, either there are no constraint violations or we couldn't fix them
+    # Try a standard edge swap but with more focus on high-cost edges
+
+    # Find high-cost edges in the tree
+    edges = [(u, v, safe_get_edge_weight(tree, u, v, default_weight=1)) for u, v in tree.edges()]
+    edges.sort(key=lambda x: -x[2])  # Sort by weight, highest first
+
+    # Try to replace one of the highest-cost edges
+    edge_idx = min(int(random.expovariate(0.5) * len(edges)), len(edges) - 1)
+    u, v, _ = edges[edge_idx]
+
+    # Remove this edge
+    tree.remove_edge(u, v)
+
+    # Standard reconnection logic similar to generate_neighbor_tree
+    components = list(nx.connected_components(tree))
+
+    if len(components) == 1:
+        # The edge didn't disconnect the tree (shouldn't happen in a proper tree)
+        weight = safe_get_edge_weight(G, u, v, default_weight=1)
+        tree.add_edge(u, v, weight=weight)
+        return generate_neighbor_tree(G, tree, max_children, penalty)
+
+    # Find a new edge to connect components
+    comp1, comp2 = components[0], components[1]
+
+    potential_edges = []
+    for n1 in comp1:
+        for n2 in comp2:
+            if G.has_edge(n1, n2) and (n1, n2) != (u, v):
+                weight = safe_get_edge_weight(G, n1, n2, default_weight=1)
+                potential_edges.append((n1, n2, weight))
+
+    if not potential_edges:
+        weight = safe_get_edge_weight(G, u, v, default_weight=1)
+        tree.add_edge(u, v, weight=weight)
+        return generate_neighbor_tree(G, tree, max_children, penalty)
+
+    # Sort by weight
+    potential_edges.sort(key=lambda x: x[2])
+
+    # Pick from the better edges with some randomness
+    # More likely to pick better edges, but still some exploration
+    idx = min(int(random.expovariate(2) * len(potential_edges)), len(potential_edges) - 1)
+    n1, n2, _ = potential_edges[idx]
+
+    # Add the new edge
+    weight = safe_get_edge_weight(G, n1, n2, default_weight=1)
+    tree.add_edge(n1, n2, weight=weight)
+
+    return tree
+
+#==============================================================================
+#                           7. FUNZIONI DI MIGLIORAMENTO
+#==============================================================================
+def try_random_edge_swap(G, current_tree, max_children, penalty, neighborhood_size=1):
+    """
+    Implementa una strategia best-improvement per il local search con parallelizzazione.
+    OPTIMIZATION: Limita l'esplorazione del vicinato per istanze grandi per migliorare le prestazioni.
+
+    Args:
+        G: Original graph
+        current_tree: Current spanning tree (modificabile in-place)
+        max_children: Maximum allowed number of children
+        penalty: Penalty for violations
+        neighborhood_size: Numero di scambi candidati da provare
+
+    Returns:
+        bool: True if improvement was made
+    """
+    tree_edges = list(current_tree.edges())
+    non_tree_edges = [e for e in G.edges() if e not in tree_edges and (e[1], e[0]) not in tree_edges]
+
+    if not non_tree_edges:
+        return False
+
+    # OPTIMIZATION: Limit neighborhood exploration for large instances
+    num_nodes = len(G.nodes())
+    if num_nodes > 100:
+        # For large instances, limit the number of edge candidates to explore
+        max_candidates = min(neighborhood_size * 10, len(tree_edges) // 4, 50)
+        if len(tree_edges) > max_candidates:
+            tree_edges = random.sample(tree_edges, max_candidates)
+
+        max_non_tree = min(len(non_tree_edges), max_candidates * 2)
+        if len(non_tree_edges) > max_non_tree:
+            non_tree_edges = random.sample(non_tree_edges, max_non_tree)
+
+    best_cost = calculate_cost_local(current_tree, max_children, penalty)
+
+    # Generate candidate edge swaps with limited exploration
+    edge_candidates = []
+    max_swaps = min(neighborhood_size, len(tree_edges), len(non_tree_edges))
+    for _ in range(max_swaps):
+        edge_to_remove = random.choice(tree_edges)
+        edge_to_add = random.choice(non_tree_edges)
+        edge_candidates.append((edge_to_remove, edge_to_add))
+
+    # Use adaptive parallel evaluation for multiple candidates
+    if neighborhood_size > 1 and len(G.nodes) > 30:  # Lower threshold for parallelization
+        # Parallel evaluation with adaptive resource management
+        try:
+            results = parallel_edge_swap_evaluation(G, current_tree, edge_candidates, max_children, penalty)
+
+            # Find the best valid result
+            best_result = None
+            best_swap_info = None
+
+            for i, result in enumerate(results):
+                if result is not None:
+                    cost, modified_tree = result
+                    if cost < best_cost:
+                        best_cost = cost
+                        best_result = modified_tree
+                        best_swap_info = (edge_candidates[i][0], edge_candidates[i][1], cost)
+
+            # Apply the best improvement if found
+            if best_result is not None:
+                current_tree.clear()
+                current_tree.add_edges_from(best_result.edges(data=True))
+
+                if best_swap_info:
+                    logging.debug(f"Adaptive parallel best improvement swap applied: removed {best_swap_info[0]}, "
+                                 f"added {best_swap_info[1]}, new cost: {best_swap_info[2]}")
+                return True
+
+        except Exception as e:
+            logging.warning(f"Adaptive parallel edge swap failed, falling back to sequential: {e}")
+
+    # Sequential evaluation (fallback or for small neighborhood_size)
+    best_tree = None
+    best_swap_info = None
+
+    for edge_to_remove, edge_to_add in edge_candidates:
+        # CRITICAL FIX: Verify edges exist before attempting swap
+        if not current_tree.has_edge(*edge_to_remove):
+            logging.debug(f"Edge {edge_to_remove} not found in current tree, skipping swap")
+            continue
+
+        if not G.has_edge(*edge_to_add):
+            logging.debug(f"Edge {edge_to_add} not found in original graph, skipping swap")
+            continue
+
+        # Crea copia temporanea dell'albero e applica lo scambio
+        temp_tree = current_tree.copy()
+
+        try:
+            temp_tree.remove_edge(*edge_to_remove)
+            # FIXED: Use safe weight access to prevent KeyError
+            edge_weight = safe_get_edge_weight(G, edge_to_add[0], edge_to_add[1], default_weight=1)
+            temp_tree.add_edge(*edge_to_add, weight=edge_weight)
+
+            # Verifica che la nuova struttura sia ancora un albero valido
+            if nx.is_connected(temp_tree) and nx.is_tree(temp_tree):
+                new_cost = calculate_cost_local(temp_tree, max_children, penalty)
+
+                # Se questo scambio è migliore del migliore trovato finora
+                if new_cost < best_cost:
+                    best_cost = new_cost
+                    best_tree = temp_tree.copy()
+                    best_swap_info = (edge_to_remove, edge_to_add, new_cost)
+        except (KeyError, nx.NetworkXError) as e:
+            logging.debug(f"Error during edge swap {edge_to_remove} -> {edge_to_add}: {e}")
+            continue
+
+    # Se abbiamo trovato almeno un miglioramento, applica il migliore
+    if best_tree is not None:
+        current_tree.clear()
+        current_tree.add_edges_from(best_tree.edges(data=True))
+
+        # Log opzionale per debug
+        if best_swap_info:
+            logging.debug(f"Sequential best improvement swap applied: removed {best_swap_info[0]}, "
+                         f"added {best_swap_info[1]}, new cost: {best_swap_info[2]}")
+
+        return True
+
+    return False  # nessun miglioramento trovato
+
+def fix_constraint_violations(G, current_tree, constrained_nodes, max_children, penalty, neighborhood_size=1):
+    """
+    Corregge i vincoli violati provando più alternative per ciascun nodo con parallelizzazione.
+    Utilizza una strategia multi-trial con neighborhood_size tentativi per nodo.
+
+    Args:
+        G: Original graph
+        current_tree: Current spanning tree (modificabile in-place)
+        constrained_nodes: List of nodes violating child constraints
+        max_children: Maximum allowed number of children
+        penalty: Penalty for violations
+        neighborhood_size: Numero di tentativi per ciascun nodo violante
+
+    Returns:
+        bool: True if improvement was made
+    """
+    modified = False
+    best_cost = calculate_cost_local(current_tree, max_children, penalty)
+
+    # Use adaptive parallel evaluation for multiple constrained nodes when beneficial
+    if len(constrained_nodes) > 1 and neighborhood_size > 1 and len(G.nodes) > 30:  # Lower threshold
+        try:
+            # Generate all repair candidates for all constrained nodes
+            all_candidates = []
+            node_candidate_mapping = {}
+
+            for node in constrained_nodes:
+                node_candidates = _generate_constraint_repair_candidates(
+                    G, current_tree, node, neighborhood_size
+                )
+                if node_candidates:
+                    start_idx = len(all_candidates)
+                    all_candidates.extend(node_candidates)
+                    end_idx = len(all_candidates)
+                    node_candidate_mapping[node] = (start_idx, end_idx)
+
+            if all_candidates:
+                # Adaptive parallel evaluation of all candidates
+                results = parallel_edge_swap_evaluation(G, current_tree, all_candidates, max_children, penalty)
+
+                # Find the best improvement across all nodes
+                best_result = None
+                best_node = None
+
+                for node, (start_idx, end_idx) in node_candidate_mapping.items():
+                    node_results = results[start_idx:end_idx]
+
+                    for result in node_results:
+                        if result is not None:
+                            cost, modified_tree = result
+                            if cost < best_cost:
+                                best_cost = cost
+                                best_result = modified_tree
+                                best_node = node
+
+                # Apply the best improvement if found
+                if best_result is not None:
+                    current_tree.clear()
+                    current_tree.add_edges_from(best_result.edges(data=True))
+                    modified = True
+                    logging.debug(f"Adaptive parallel constraint violation fixed for node {best_node}, new cost: {best_cost}")
+                    return modified
+
+        except Exception as e:
+            logging.warning(f"Adaptive parallel constraint fixing failed, falling back to sequential: {e}")
+
+    # Sequential processing (fallback or for small problems)
+    for node in constrained_nodes:
+        # Ottieni gli archi del nodo violante e gli archi non presenti nell'albero
+        tree_edges_node = [(neighbor, safe_get_edge_weight(current_tree, node, neighbor, default_weight=1))
+                          for neighbor in current_tree.neighbors(node)]
+
+        # Trova archi potenziali dal grafo originale che non sono nell'albero
+        non_tree_edges_node = []
+        for neighbor in G.neighbors(node):
+            if not current_tree.has_edge(node, neighbor):
+                weight = safe_get_edge_weight(G, node, neighbor, default_weight=1)
+                non_tree_edges_node.append((neighbor, weight))
+
+        if not tree_edges_node or not non_tree_edges_node:
+            continue  # Salta se non ci sono opzioni di scambio
+
+        best_tree_for_node = None
+        best_cost_for_node = best_cost
+
+        # Prova neighborhood_size tentativi per questo nodo
+        for attempt in range(neighborhood_size):
+            # Seleziona casualmente un arco da rimuovere (preferendo quelli ad alto peso)
+            tree_edges_node.sort(key=lambda x: -x[1])  # Ordina per peso decrescente
+
+            # Selezione probabilistica che favorisce archi ad alto peso
+            if len(tree_edges_node) > 1:
+                # Usa distribuzione esponenziale per favorire archi pesanti
+                idx = min(int(random.expovariate(2) * len(tree_edges_node)), len(tree_edges_node) - 1)
+                neighbor_to_remove, _ = tree_edges_node[idx]
+            else:
+                neighbor_to_remove, _ = tree_edges_node[0]
+
+            # Seleziona casualmente un arco da aggiungere (preferendo quelli a basso peso)
+            non_tree_edges_node.sort(key=lambda x: x[1])  # Ordina per peso crescente
+
+            if len(non_tree_edges_node) > 1:
+                # Usa distribuzione esponenziale per favorire archi leggeri
+                idx = min(int(random.expovariate(2) * len(non_tree_edges_node)), len(non_tree_edges_node) - 1)
+                neighbor_to_add, _ = non_tree_edges_node[idx]
+            else:
+                neighbor_to_add, _ = non_tree_edges_node[0]
+
+            # CRITICAL FIX: Verify edges exist before attempting swap
+            if not current_tree.has_edge(node, neighbor_to_remove):
+                logging.debug(f"Edge ({node}, {neighbor_to_remove}) not found in tree, skipping")
+                continue
+
+            if not G.has_edge(node, neighbor_to_add):
+                logging.debug(f"Edge ({node}, {neighbor_to_add}) not found in original graph, skipping")
+                continue
+
+            # Crea copia temporanea e applica lo scambio
+            temp_tree = current_tree.copy()
+
+            try:
+                temp_tree.remove_edge(node, neighbor_to_remove)
+                # FIXED: Use safe weight access to prevent KeyError
+                edge_weight = safe_get_edge_weight(G, node, neighbor_to_add, default_weight=1)
+                temp_tree.add_edge(node, neighbor_to_add, weight=edge_weight)
+
+                # Verifica che la nuova struttura sia ancora un albero valido e connesso
+                if nx.is_connected(temp_tree) and nx.is_tree(temp_tree):
+                    new_cost = calculate_cost_local(temp_tree, max_children, penalty)
+
+                    # Se questo tentativo è migliore del migliore per questo nodo
+                    if new_cost < best_cost_for_node:
+                        best_cost_for_node = new_cost
+                        best_tree_for_node = temp_tree.copy()
+            except (KeyError, nx.NetworkXError) as e:
+                logging.debug(f"Error during constraint violation fix for node {node}: {e}")
+                continue
+
+        # Se abbiamo trovato un miglioramento per questo nodo, applicalo
+        if best_tree_for_node is not None:
+            current_tree.clear()
+            current_tree.add_edges_from(best_tree_for_node.edges(data=True))
+            best_cost = best_cost_for_node
+            modified = True
+
+            # Log opzionale per debug
+            logging.debug(f"Sequential constraint violation fixed for node {node}, new cost: {best_cost}")
+
+    return modified
+
+def _generate_constraint_repair_candidates(G, current_tree, node, neighborhood_size):
+    """
+    Generate edge swap candidates for repairing constraint violations for a specific node.
+
+    Args:
+        G: Original graph
+        current_tree: Current spanning tree
+        node: Node with constraint violations
+        neighborhood_size: Number of repair attempts to generate
+
+    Returns:
+        List of (edge_to_remove, edge_to_add) tuples
+    """
+    candidates = []
+
+    # Get edges from the violating node
+    tree_edges_node = [(neighbor, safe_get_edge_weight(current_tree, node, neighbor, default_weight=1))
+                      for neighbor in current_tree.neighbors(node)]
+
+    # Find potential edges from the original graph that are not in the tree
+    non_tree_edges_node = []
+    for neighbor in G.neighbors(node):
+        if not current_tree.has_edge(node, neighbor):
+            weight = safe_get_edge_weight(G, node, neighbor, default_weight=1)
+            non_tree_edges_node.append((neighbor, weight))
+
+    if not tree_edges_node or not non_tree_edges_node:
+        return candidates
+
+    # Generate neighborhood_size candidates
+    for _ in range(neighborhood_size):
+        # Select edge to remove (preferring high weight edges)
+        tree_edges_node.sort(key=lambda x: -x[1])
+        if len(tree_edges_node) > 1:
+            idx = min(int(random.expovariate(2) * len(tree_edges_node)), len(tree_edges_node) - 1)
+            neighbor_to_remove, _ = tree_edges_node[idx]
+        else:
+            neighbor_to_remove, _ = tree_edges_node[0]
+
+        # Select edge to add (preferring low weight edges)
+        non_tree_edges_node.sort(key=lambda x: x[1])
+        if len(non_tree_edges_node) > 1:
+            idx = min(int(random.expovariate(2) * len(non_tree_edges_node)), len(non_tree_edges_node) - 1)
+            neighbor_to_add, _ = non_tree_edges_node[idx]
+        else:
+            neighbor_to_add, _ = non_tree_edges_node[0]
+
+        edge_to_remove = (node, neighbor_to_remove)
+        edge_to_add = (node, neighbor_to_add)
+        candidates.append((edge_to_remove, edge_to_add))
+
+    return candidates
+
+def _improve_tree_locally(G, tree, max_children, penalty):
+    """
+    Performs a quick local improvement on the tree.
+    """
+    improved = True
+    improvement_rounds = 0
+
+    while improved and improvement_rounds < 5:  # Limit to 5 rounds
+        improved = False
+        improvement_rounds += 1
+
+        # Try to reduce child constraint violations
+        constrained_nodes = get_violating_nodes(tree, max_children)
+        if constrained_nodes:
+            # Try to fix one violation
+            node = random.choice(constrained_nodes)
+            neighbors = list(tree.neighbors(node))
+
+            # Sort edges by weight (prefer to remove higher weight edges)
+            edges_to_remove = [(node, neighbor, safe_get_edge_weight(tree, node, neighbor, default_weight=1))
+                              for neighbor in neighbors]
+            edges_to_remove.sort(key=lambda x: -x[2])  # Sort by weight descending
+
+            for _, neighbor, _ in edges_to_remove:
+                # Try removing this edge
+                tree.remove_edge(node, neighbor)
+
+                # Check if tree is still connected
+                if not nx.is_connected(tree):
+                    # Find alternative connection
+                    best_alternative = None
+                    best_weight = float('inf')
+
+                    components = list(nx.connected_components(tree))
+                    comp1 = [c for c in components if node in c][0]
+                    comp2 = [c for c in components if neighbor in c][0]
+
+                    for n1 in comp1:
+                        for n2 in comp2:
+                            if G.has_edge(n1, n2) and (n1, n2) != (node, neighbor):
+                                weight = safe_get_edge_weight(G, n1, n2, default_weight=1)
+                                if weight < best_weight:
+                                    best_weight = weight
+                                    best_alternative = (n1, n2)
+
+                    if best_alternative:
+                        n1, n2 = best_alternative
+                        weight = safe_get_edge_weight(G, n1, n2, default_weight=1)
+                        tree.add_edge(n1, n2, weight=weight)
+                        improved = True
+                        break
+                    else:
+                        # No alternative found, put back the original edge
+                        weight = safe_get_edge_weight(G, node, neighbor, default_weight=1)
+                        tree.add_edge(node, neighbor, weight=weight)
+
+        # If no constraints violation fixes were made, try edge swaps for cost improvement
+        if not improved:
+            original_cost = calculate_cost_local(tree, max_children, penalty)
+
+            # Try some random edge swaps
+            for _ in range(5):  # Try a limited number of swaps
+                edge_to_remove = random.choice(list(tree.edges()))
+                u, v = edge_to_remove
+
+                # Remove the edge
+                tree.remove_edge(u, v)
+
+                # Check if tree is still connected (should not be)
+                components = list(nx.connected_components(tree))
+                if len(components) == 1:  # This should not happen in a proper tree
+                    continue
+
+                # Find an alternative edge to connect the components
+                comp1, comp2 = components[0], components[1]
+                best_edge = None
+                best_cost = float('inf')
+
+                candidate_edges = []
+                for n1 in comp1:
+                    for n2 in comp2:
+                        if G.has_edge(n1, n2) and (n1, n2) != (u, v):
+                            candidate_edges.append((n1, n2))
+
+                if candidate_edges:
+                    # Try each candidate edge and evaluate cost
+                    for edge in candidate_edges:
+                        n1, n2 = edge
+                        weight = safe_get_edge_weight(G, n1, n2, default_weight=1)
+                        tree.add_edge(n1, n2, weight=weight)
+
+                        cost = calculate_cost_local(tree, max_children, penalty)
+                        if cost < best_cost:
+                            best_cost = cost
+                            best_edge = edge
+
+                        # Remove the edge for next iteration
+                        tree.remove_edge(n1, n2)
+
+                    # Add the best edge found
+                    if best_edge:
+                        n1, n2 = best_edge
+                        weight = safe_get_edge_weight(G, n1, n2, default_weight=1)
+                        tree.add_edge(n1, n2, weight=weight)
+
+                        if best_cost < original_cost:
+                            improved = True
+                        else:
+                            # If no improvement found, revert to original tree structure
+                            tree.remove_edge(n1, n2)
+                            weight = safe_get_edge_weight(G, u, v, default_weight=1)
+                            tree.add_edge(u, v, weight=weight)
+                else:
+                    # No candidate edges found, restore original edge
+                    weight = safe_get_edge_weight(G, u, v, default_weight=1)
+                    tree.add_edge(u, v, weight=weight)
+
+    return tree
+
+def _improve_best_solution(G, tree, max_children, penalty):
+    """
+    Final intensification to improve the best solution found.
+    Uses a combination of strategies to try to find better solutions.
+    """
+    best_tree = tree.copy()
+    best_cost = calculate_cost_sa(tree, max_children, penalty)
+
+    # Try a more exhaustive edge swap approach
+    for u, v in list(best_tree.edges()):
+        # Remove the edge
+        best_tree.remove_edge(u, v)
+
+        # Find the components
+        components = list(nx.connected_components(best_tree))
+        if len(components) != 2:  # This should not happen in a tree
+            weight = safe_get_edge_weight(G, u, v, default_weight=1)
+            best_tree.add_edge(u, v, weight=weight)
+            continue
+
+        comp1, comp2 = components
+
+        # Try all possible alternative edges
+        alternatives = []
+        for n1 in comp1:
+            for n2 in comp2:
+                if G.has_edge(n1, n2) and (n1, n2) != (u, v):
+                    weight = safe_get_edge_weight(G, n1, n2, default_weight=1)
+                    alternatives.append((n1, n2, weight))
+
+        # Sort by weight ascending
+        alternatives.sort(key=lambda x: x[2])
+
+        # Try the top 5 alternatives
+        for i, (n1, n2, _) in enumerate(alternatives[:5]):
+            weight = safe_get_edge_weight(G, n1, n2, default_weight=1)
+            best_tree.add_edge(n1, n2, weight=weight)
+            new_cost = calculate_cost_sa(best_tree, max_children, penalty)
+
+            if new_cost < best_cost:
+                best_cost = new_cost
+                # Keep this improvement and continue
+                break
+            else:
+                # Undo this change
+                best_tree.remove_edge(n1, n2)
+                # If this was the last alternative, put back the original edge
+                if i == min(4, len(alternatives) - 1):
+                    weight = safe_get_edge_weight(G, u, v, default_weight=1)
+                    best_tree.add_edge(u, v, weight=weight)
+
+    # Try to fix child constraint violations more aggressively
+    violating_nodes = get_violating_nodes(best_tree, max_children)
+    constrained_nodes = []
+    for node in violating_nodes:
+        children_count = len([child for child in best_tree.neighbors(node)
+                             if best_tree.degree(child) < best_tree.degree(node)])
+        constrained_nodes.append((node, children_count))
+
+    if constrained_nodes:
+        # Sort by violation severity
+        constrained_nodes.sort(key=lambda x: x[1], reverse=True)
+
+        # Try to fix the worst violations
+        for node, _ in constrained_nodes[:3]:  # Focus on worst 3 violations
+            neighbors = list(best_tree.neighbors(node))
+
+            # Try removing each edge and finding the best alternative
+            for neighbor in neighbors:
+                best_tree.remove_edge(node, neighbor)
+
+                if not nx.is_connected(best_tree):
+                    # Find components
+                    components = list(nx.connected_components(best_tree))
+                    comp1 = [c for c in components if node in c][0]
+                    comp2 = [c for c in components if neighbor in c][0]
+
+                    # Find alternative connections that don't involve the constrained node
+                    alt_edges = []
+                    for n1 in comp1:
+                        if n1 == node:
+                            continue  # Skip the constrained node
+                        for n2 in comp2:
+                            if G.has_edge(n1, n2):
+                                weight = safe_get_edge_weight(G, n1, n2, default_weight=1)
+                                alt_edges.append((n1, n2, weight))
+
+                    if alt_edges:
+                        # Sort by weight
+                        alt_edges.sort(key=lambda x: x[2])
+
+                        # Pick one of the best alternatives with some randomness
+                        idx = min(int(random.expovariate(1) * len(alt_edges)), len(alt_edges) - 1)
+                        n1, n2, _ = alt_edges[idx]
+                        weight = safe_get_edge_weight(G, n1, n2, default_weight=1)
+                        best_tree.add_edge(n1, n2, weight=weight)
+                        return best_tree  # Successfully modified
+                    else:
+                        # No alternative found, put back the original edge
+                        weight = safe_get_edge_weight(G, node, neighbor, default_weight=1)
+                        best_tree.add_edge(node, neighbor, weight=weight)
+
+    # If we get here, either there are no constraint violations or we couldn't fix them
+    # Try a standard edge swap but with more focus on high-cost edges
+
+    # Find high-cost edges in the tree
+    edges = [(u, v, safe_get_edge_weight(best_tree, u, v, default_weight=1)) for u, v in best_tree.edges()]
+    edges.sort(key=lambda x: -x[2])  # Sort by weight, highest first
+
+    # Try to replace one of the highest-cost edges
+    edge_idx = min(int(random.expovariate(0.5) * len(edges)), len(edges) - 1)
+    u, v, _ = edges[edge_idx]
+
+    # Remove this edge
+    best_tree.remove_edge(u, v)
+
+    # Standard reconnection logic similar to generate_neighbor_tree
+    components = list(nx.connected_components(best_tree))
+
+    if len(components) == 1:
+        # The edge didn't disconnect the tree (shouldn't happen in a proper tree)
+        weight = safe_get_edge_weight(G, u, v, default_weight=1)
+        best_tree.add_edge(u, v, weight=weight)
+        return generate_neighbor_tree(G, best_tree, max_children, penalty)
+
+    # Find a new edge to connect components
+    comp1, comp2 = components[0], components[1]
+
+    potential_edges = []
+    for n1 in comp1:
+        for n2 in comp2:
+            if G.has_edge(n1, n2) and (n1, n2) != (u, v):
+                weight = safe_get_edge_weight(G, n1, n2, default_weight=1)
+                potential_edges.append((n1, n2, weight))
+
+    if not potential_edges:
+        weight = safe_get_edge_weight(G, u, v, default_weight=1)
+        best_tree.add_edge(u, v, weight=weight)
+        return generate_neighbor_tree(G, best_tree, max_children, penalty)
+
+    # Sort by weight
+    potential_edges.sort(key=lambda x: x[2])
+
+    # Pick from the better edges with some randomness
+    # More likely to pick better edges, but still some exploration
+    idx = min(int(random.expovariate(2) * len(potential_edges)), len(potential_edges) - 1)
+    n1, n2, _ = potential_edges[idx]
+
+    # Add the new edge
+    weight = safe_get_edge_weight(G, n1, n2, default_weight=1)
+    best_tree.add_edge(n1, n2, weight=weight)
+
+    return best_tree
+
+#==============================================================================
+#                           8. BENCMARKING E TEST
+#==============================================================================
+def test_instance(G, max_children, penalty, instance_name="", stop_event=None, queue=None, progress_info=None):
+    """
+    Test different spanning tree algorithms on a graph instance with adaptive resource management.
+
+    Args:
+        G (nx.Graph): The input graph.
+        max_children (int): Maximum allowed number of children for each node.
+        penalty (int): Penalty value for child constraint violations.
+        instance_name (str): Name of the instance for reporting.
+        stop_event (threading.Event): Event to signal stopping.
+        queue (queue.Queue): Queue for progress updates.
+        progress_info (dict): Dictionary with progress tracking information:
+                             - start_progress: Starting point for progress percentage
+                             - total_progress: Total progress percentage allocated for this instance
+
+    Returns:
+        dict: Metrics for each algorithm.
+    """
+    # Initialize adaptive resource management and log system capabilities
+    if queue:
+        queue.put(("log", (f"Initializing adaptive resource management for {instance_name}...", "info")))
+
+    # Detect and log system resources
+    cpu_cores, total_ram_gb, available_ram_gb = detect_system_resources()
+    optimal_workers = calculate_optimal_workers(safety_margin=0.7)
+
+    if queue:
+        queue.put(("log", (f"System resources: {cpu_cores} CPU cores, {total_ram_gb:.1f}GB RAM ({available_ram_gb:.1f}GB available)", "info")))
+        queue.put(("log", (f"Optimal worker count: {optimal_workers} (with 70% safety margin)", "info")))
+
+
+
+    # Optimize memory representation for large graphs
+    if len(G.nodes()) > 100:  # Solo per grafi di dimensioni significative
+        if queue:
+            queue.put(("log", (f"Ottimizzando rappresentazione del grafo per {instance_name}...", "info")))
+        G_opt, node_mapping, _ = optimize_memory_usage(G.copy())
+        G = G_opt  # Usa il grafo ottimizzato
+        results = {"graph": G, "node_mapping": node_mapping}
+    else:
+        G = G.copy()
+        results = {"graph": G}
+
+    # Store resource management info in results
+    results["system_resources"] = {
+        "cpu_cores": cpu_cores,
+        "total_ram_gb": total_ram_gb,
+        "available_ram_gb": available_ram_gb,
+        "optimal_workers": optimal_workers
+    }
+
+    # Set default progress tracking if not provided
+    if progress_info is None:
+        progress_info = {
+            "start_progress": 0,
+            "total_progress": 100,
+            "queue": queue
+        }
+
+    # Helper function to update progress with proper scaling
+    def update_progress(phase, phase_progress, algorithm=""):
+        if queue:
+            # Scale the progress relative to the overall calculation
+            # Each algorithm gets roughly 1/3 of the total instance progress
+            start = progress_info["start_progress"]
+            total = progress_info["total_progress"]
+
+            # Algorithms get different portions of the total progress
+            algorithm_portions = {
+                "greedy": 0.2,  # 20% for greedy
+                "local": 0.3,   # 30% for local search
+                "sa": 0.5       # 50% for simulated annealing
+            }
+
+            # Calculate which portion of progress we're in
+            if algorithm == "greedy":
+                algo_start = start
+                algo_total = total * algorithm_portions["greedy"]
+            elif algorithm == "local":
+                algo_start = start + total * algorithm_portions["greedy"]
+                algo_total = total * algorithm_portions["local"]
+            elif algorithm == "sa":
+                algo_start = start + total * (algorithm_portions["greedy"] + algorithm_portions["local"])
+                algo_total = total * algorithm_portions["sa"]
+            else:
+                # For general updates not tied to a specific algorithm
+                algo_start = start
+                algo_total = total
+
+            # Calculate the scaled progress
+            scaled_progress = algo_start + (phase_progress / 100.0) * algo_total
+
+            # Update the UI
+            queue.put(("phase", f"{phase}"))
+            queue.put(("progress", int(scaled_progress)))
+            if algorithm:
+                queue.put(("algorithm", algorithm))
+
+    # Function to check if stop is requested
+    def check_stop():
+        if stop_event and stop_event.is_set():
+            return True
+        return False
+
+    # 🔬 PRECISION IMPROVEMENT: Enhanced memory tracking with memory_profiler
+    def get_memory_usage_precise():
+        """
+        Get precise memory usage using memory_profiler for more accurate measurements.
+        Falls back to psutil if memory_profiler is not available.
+
+        Returns:
+            float: Memory usage in KB
+        """
+        gc.collect()  # Force garbage collection for accurate measurement
+
+        if MEMORY_PROFILER_AVAILABLE:
+            try:
+                # Use memory_profiler for precise measurement
+                current_memory = memory_usage()[0]  # Returns memory in MB
+                return current_memory * 1024  # Convert to KB for consistency
+            except Exception as e:
+                logging.warning(f"memory_profiler measurement failed: {e}, falling back to psutil")
+
+        # Fallback to psutil
+        process = psutil.Process()
+        memory_info = process.memory_info()
+        return memory_info.rss / 1024  # in KB
+
+
+
+    def measure_algorithm_memory(algorithm_func, *args, **kwargs):
+        """
+        Measure memory usage during algorithm execution using memory_profiler.
+
+        Args:
+            algorithm_func: The algorithm function to execute
+            *args: Arguments for the algorithm function
+            **kwargs: Keyword arguments for the algorithm function
+
+        Returns:
+            tuple: (result, peak_memory_kb, average_memory_kb)
+        """
+        if MEMORY_PROFILER_AVAILABLE:
+            try:
+                # Wrapper function for memory_usage monitoring
+                def algorithm_wrapper():
+                    return algorithm_func(*args, **kwargs)
+
+                # Monitor memory usage during execution
+                mem_usage = memory_usage((algorithm_wrapper, ()), interval=0.1, timeout=None)
+
+                if mem_usage:
+                    peak_memory_mb = max(mem_usage)
+                    avg_memory_mb = sum(mem_usage) / len(mem_usage)
+
+                    # Convert to KB for consistency
+                    peak_memory_kb = peak_memory_mb * 1024
+                    avg_memory_kb = avg_memory_mb * 1024
+
+                    # Execute the function to get the result
+                    result = algorithm_func(*args, **kwargs)
+
+                    return result, peak_memory_kb, avg_memory_kb
+                else:
+                    # Fallback if memory monitoring failed
+                    result = algorithm_func(*args, **kwargs)
+                    current_memory = get_memory_usage_precise()
+                    return result, current_memory, current_memory
+
+            except Exception as e:
+                logging.warning(f"memory_profiler monitoring failed: {e}, using fallback measurement")
+
+        # Fallback to simple before/after measurement
+        start_memory = get_memory_usage_precise()
+        result = algorithm_func(*args, **kwargs)
+        end_memory = get_memory_usage_precise()
+
+        memory_used = max(0, end_memory - start_memory)
+        return result, memory_used, memory_used
+
+    # 0. Check if DOPO (FAST) vectorized algorithm should be used based on dynamic thresholds
+    graph_size = len(G.nodes())
+    dynamic_thresholds = get_dynamic_thresholds()
+    use_dopo_fast = dynamic_thresholds.should_use_vectorization(graph_size)
+
+    if use_dopo_fast and queue:
+        vectorization_threshold = dynamic_thresholds.get_threshold("vectorization")
+        queue.put(("log", (f"🚀 Large graph detected ({graph_size} nodes > {vectorization_threshold}). DOPO (FAST) vectorized algorithm will be used.", "info")))
+
+    # 1. Run Greedy Algorithm (or DOPO FAST for large graphs)
+    if check_stop():
+        return results
+
+    if use_dopo_fast:
+        update_progress("DOPO (FAST) Vectorized Algorithm", 0, "greedy")
+        if queue:
+            queue.put(("log", (f"🚀 Executing DOPO (FAST) vectorized algorithm with precise memory measurement for {instance_name}...", "info")))
+    else:
+        update_progress("Greedy Spanning Tree", 0, "greedy")
+        if queue:
+            queue.put(("log", (f"🔬 Esecuzione algoritmo greedy con misurazione memoria precisa per {instance_name}...", "info")))
+
+    start_time = time.time()
+
+    # 🔬 PRECISION IMPROVEMENT: Use memory_profiler for precise memory measurement
+    def greedy_algorithm_wrapper():
+        # Execute appropriate algorithm based on graph size and use_dopo_fast flag
+        graph_size = len(G.nodes())
+
+        if use_dopo_fast:
+            # Use DOPO (FAST) vectorized algorithm for large graphs
+            algorithm_timeout = adaptive_timeout_calculation(graph_size, base_timeout=120)  # More time for vectorized operations
+            try:
+                return safe_execution_wrapper(
+                    dopo_fast_vectorized_spanning_tree,
+                    G, max_children, penalty,
+                    timeout=algorithm_timeout
+                )
+            except Exception as e:
+                if queue:
+                    queue.put(("log", (f"DOPO (FAST) failed: {e}. Falling back to standard greedy.", "warning")))
+                # Fallback to standard greedy
+                greedy_timeout = adaptive_timeout_calculation(graph_size, base_timeout=60)
+                return safe_execution_wrapper(
+                    greedy_spanning_tree,
+                    G, max_children, penalty,
+                    timeout=greedy_timeout
+                )
+        else:
+            # Execute standard greedy algorithm with safety wrapper and adaptive timeout
+            greedy_timeout = adaptive_timeout_calculation(graph_size, base_timeout=60)  # Base 1 minute for greedy
+            try:
+                return safe_execution_wrapper(
+                    greedy_spanning_tree,
+                    G, max_children, penalty,
+                    timeout=greedy_timeout
+                )
+            except TimeoutError:
+                if queue:
+                    queue.put(("log", (f"Greedy algorithm timed out after {greedy_timeout}s. Using fallback solution.", "warning")))
+                # Fallback to a simple MST-based solution
+                greedy_tree = nx.minimum_spanning_tree(G)
+                greedy_cost = calculate_cost_greedy(greedy_tree, max_children, penalty)
+                return greedy_tree, greedy_cost
+            except Exception as e:
+                if queue:
+                    queue.put(("log", (f"Greedy algorithm failed: {e}. Using fallback solution.", "error")))
+                # Emergency fallback
+                greedy_tree = nx.Graph()
+                greedy_tree.add_nodes_from(G.nodes())
+                greedy_cost = float('inf')
+                return greedy_tree, greedy_cost
+
+    # Measure memory usage during algorithm execution
+    try:
+        (greedy_tree, greedy_cost), peak_memory, avg_memory = measure_algorithm_memory(greedy_algorithm_wrapper)
+    except Exception as e:
+        logging.error(f"Memory profiling failed for greedy algorithm: {e}")
+        # Fallback to traditional measurement
+        greedy_tree, greedy_cost = greedy_algorithm_wrapper()
+        peak_memory = avg_memory = get_memory_usage_precise()
+
+    end_time = time.time()
+    greedy_time = end_time - start_time
+
+    # 🔬 PRECISION IMPROVEMENT: Use precise memory measurements
+    greedy_memory = peak_memory  # Use peak memory as the primary metric
+
+    if queue:
+        queue.put(("log", (f"📊 Greedy - Memoria peak: {peak_memory:.1f}KB, avg: {avg_memory:.1f}KB", "info")))
+
+    # Calcola violazioni dei vincoli
+    greedy_violations = count_constraint_violations(greedy_tree, max_children)
+
+    # Test di coerenza (solo in debug mode)
+    if logging.getLogger().isEnabledFor(logging.DEBUG):
+        if not test_violations_consistency(greedy_tree, max_children):
+            logging.warning("Inconsistenza rilevata nel calcolo delle violazioni per Greedy")
+
+    results["greedy_tree"] = greedy_tree
+    results["greedy_cost"] = greedy_cost
+    results["greedy_time"] = greedy_time
+    results["greedy_memory"] = greedy_memory
+    results["greedy_violations"] = greedy_violations
+    results["greedy_calls"] = greedy_cost_calls[0]  # Store actual call count
+
+    # Record performance for dynamic threshold adjustment
+    algorithm_name = "DOPO_FAST" if use_dopo_fast else "greedy"
+    dynamic_thresholds.record_performance(graph_size, algorithm_name, greedy_time, greedy_memory)
+
+    if queue:
+        queue.put(("log", (f"Greedy completato: costo={greedy_cost}, tempo={greedy_time:.4f}s, chiamate={greedy_cost_calls[0]}, violazioni={greedy_violations}", "success")))
+
+    update_progress("Greedy Spanning Tree", 100, "greedy")
+
+    # 2. Run Local Search
+    if check_stop():
+        return results
+
+    update_progress("Local Search", 0, "local")
+    if queue:
+        queue.put(("log", (f"🔬 Esecuzione ricerca locale con misurazione memoria precisa per {instance_name}...", "info")))
+
+    start_time = time.time()
+    graph_size = len(G.nodes())  # Define graph_size for local search
+
+    # 🔬 PRECISION IMPROVEMENT: Use memory_profiler for precise memory measurement
+    def local_search_wrapper():
+        # Execute Local Search with safety wrapper and adaptive timeout
+        local_timeout = adaptive_timeout_calculation(graph_size, base_timeout=300)  # Base 5 minutes for local search
+
+        try:
+            # Use parallel version for graphs larger than a threshold
+            if len(G.nodes()) > 50:
+                # Check system stability before parallel execution
+                is_stable, stability_message = check_system_stability()
+                if is_stable:
+                    num_threads = min(8, os.cpu_count() or 4)  # Limita a 8 thread o meno
+                    local_tree, local_calls, local_score_history = safe_execution_wrapper(
+                        parallel_local_search,
+                        G, greedy_tree, max_children, penalty,
+                        num_threads=num_threads,
+                        timeout=local_timeout
+                    )
+                    if queue:
+                        queue.put(("log", (f"Utilizzati {num_threads} thread per la ricerca locale", "info")))
+                else:
+                    if queue:
+                        queue.put(("log", (f"System instability detected: {stability_message}. Using sequential local search.", "warning")))
+                    local_tree, local_calls, local_score_history = safe_execution_wrapper(
+                        adaptive_neighborhood_local_search,
+                        G, greedy_tree, max_children, penalty,
+                        timeout=local_timeout
+                    )
+            else:
+                local_tree, local_calls, local_score_history = safe_execution_wrapper(
+                    adaptive_neighborhood_local_search,
+                    G, greedy_tree, max_children, penalty,
+                    timeout=local_timeout
+                )
+            return local_tree, local_calls, local_score_history
+        except TimeoutError:
+            if queue:
+                queue.put(("log", (f"Local Search timed out after {local_timeout}s. Using greedy solution.", "warning")))
+            # Fallback to greedy solution
+            return greedy_tree.copy(), 0, []
+        except Exception as e:
+            if queue:
+                queue.put(("log", (f"Local Search failed: {e}. Using greedy solution.", "error")))
+            # Emergency fallback
+            emergency_resource_cleanup()
+            return greedy_tree.copy(), 0, []
+
+    # Measure memory usage during algorithm execution
+    try:
+        (local_tree, local_calls, local_score_history), peak_memory, avg_memory = measure_algorithm_memory(local_search_wrapper)
+        local_search_cost_calls[0] = local_calls  # Update the global counter
+    except Exception as e:
+        logging.error(f"Memory profiling failed for local search: {e}")
+        # Fallback to traditional measurement
+        local_tree, local_calls, local_score_history = local_search_wrapper()
+        local_search_cost_calls[0] = local_calls
+        peak_memory = avg_memory = get_memory_usage_precise()
+
+    end_time = time.time()
+    local_cost = calculate_cost_local(local_tree, max_children, penalty)
+    local_time = end_time - start_time
+
+    # 🔬 PRECISION IMPROVEMENT: Use precise memory measurements
+    local_memory = peak_memory  # Use peak memory as the primary metric
+
+    if queue:
+        queue.put(("log", (f"📊 Local Search - Memoria peak: {peak_memory:.1f}KB, avg: {avg_memory:.1f}KB", "info")))
+
+    # Calcola violazioni dei vincoli
+    local_violations = count_constraint_violations(local_tree, max_children)
+
+    results["local_tree"] = local_tree
+    results["local_cost"] = local_cost
+    results["local_time"] = local_time
+    results["local_memory"] = local_memory
+    results["local_violations"] = local_violations
+    results["local_calls"] = local_search_cost_calls[0]  # Usa il valore restituito dalla funzione
+    results["local_score_history"] = local_score_history
+
+    # Record performance for dynamic threshold adjustment
+    dynamic_thresholds.record_performance(graph_size, "local_search", local_time, local_memory)
+
+    if queue:
+        queue.put(("log", (f"Ricerca locale completata: costo={local_cost}, tempo={local_time:.4f}s, chiamate={local_search_cost_calls[0]}, violazioni={local_violations}", "success")))
+
+    update_progress("Local Search", 100, "local")
+
+    # 3. Run Simulated Annealing
+    if check_stop():
+        return results
+
+    update_progress("Simulated Annealing", 0, "sa")
+    if queue:
+        queue.put(("log", (f"🔬 Esecuzione simulated annealing con misurazione memoria precisa per {instance_name}...", "info")))
+        queue.put(("log", (f"Utilizzo dell'albero ottimizzato da Local Search come soluzione iniziale", "info")))
+
+    start_time = time.time()
+
+    # Create a callback for SA that updates progress
+    def sa_progress_callback(iteration, temperature, current_cost, accepted, total_iterations):
+        if queue and iteration % max(1, total_iterations // 50) == 0:  # Update more frequently
+            progress_pct = min(100, (iteration / total_iterations) * 100)
+            update_progress("Simulated Annealing", progress_pct, "sa")
+
+            # Send detailed parameters to the UI
+            queue.put(("temp", f"{temperature:.6f}"))
+            queue.put(("iter", f"{iteration}/{total_iterations}"))
+            queue.put(("cost", f"{current_cost}"))
+            queue.put(("accept", f"{accepted}"))
+
+            # Log detailed progress at regular intervals
+            if iteration % max(1, total_iterations // 10) == 0:  # Log every 10%
+                queue.put(("log", (f"SA: It. {iteration}/{total_iterations}, Temp: {temperature:.6f}, Costo: {current_cost}", "info")))
+
+    # 🔬 PRECISION IMPROVEMENT: Use memory_profiler for precise memory measurement
+    def sa_wrapper():
+        # Execute Simulated Annealing with safety wrapper and adaptive timeout
+        sa_timeout = adaptive_timeout_calculation(graph_size, base_timeout=600)  # Base 10 minutes for SA
+
+        try:
+            # Check system stability before SA execution
+            is_stable, stability_message = check_system_stability()
+            if not is_stable:
+                if queue:
+                    queue.put(("log", (f"System instability detected: {stability_message}. SA may run with reduced performance.", "warning")))
+
+            # ENHANCEMENT: Pass both local_tree and greedy_tree to SA for optimal starting solution
+            sa_tree, sa_cost, sa_iterations, sa_accepts, sa_score_history = safe_execution_wrapper(
+                simulated_annealing_spanning_tree,
+                G, max_children, penalty,
+                initial_tree=local_tree,  # Local search result (primary choice)
+                greedy_tree=greedy_tree,  # Greedy result (backup choice)
+                stop_event=stop_event,
+                queue=queue,
+                progress_callback=sa_progress_callback,
+                timeout=sa_timeout
+            )
+            return sa_tree, sa_cost, sa_iterations, sa_accepts, sa_score_history
+        except TimeoutError:
+            if queue:
+                queue.put(("log", (f"Simulated Annealing timed out after {sa_timeout}s. Using local search solution.", "warning")))
+            # Fallback to local search solution
+            sa_tree = local_tree.copy()
+            sa_cost = calculate_cost_sa(sa_tree, max_children, penalty)
+            return sa_tree, sa_cost, 0, 0, []
+        except Exception as e:
+            if queue:
+                queue.put(("log", (f"Simulated Annealing failed: {e}. Using local search solution.", "error")))
+            # Emergency fallback
+            emergency_resource_cleanup()
+            sa_tree = local_tree.copy()
+            sa_cost = calculate_cost_sa(sa_tree, max_children, penalty)
+            return sa_tree, sa_cost, 0, 0, []
+
+    # Measure memory usage during algorithm execution
+    try:
+        (sa_tree, sa_cost, sa_iterations, sa_accepts, sa_score_history), peak_memory, avg_memory = measure_algorithm_memory(sa_wrapper)
+    except Exception as e:
+        logging.error(f"Memory profiling failed for simulated annealing: {e}")
+        # Fallback to traditional measurement
+        sa_tree, sa_cost, sa_iterations, sa_accepts, sa_score_history = sa_wrapper()
+        peak_memory = avg_memory = get_memory_usage_precise()
+
+    end_time = time.time()
+    sa_cost = calculate_cost_sa(sa_tree, max_children, penalty)
+    sa_time = end_time - start_time
+
+    # 🔬 PRECISION IMPROVEMENT: Use precise memory measurements
+    sa_memory = peak_memory  # Use peak memory as the primary metric
+
+    if queue:
+        queue.put(("log", (f"📊 Simulated Annealing - Memoria peak: {peak_memory:.1f}KB, avg: {avg_memory:.1f}KB", "info")))
+
+    # Calcola violazioni dei vincoli
+    sa_violations = count_constraint_violations(sa_tree, max_children)
+
+    results["sa_tree"] = sa_tree
+    results["sa_cost"] = sa_cost
+    results["sa_time"] = sa_time
+    results["sa_memory"] = sa_memory
+    results["sa_violations"] = sa_violations
+    results["sa_calls"] = sa_cost_calls[0]
+    results["sa_iterations"] = sa_iterations  # Keep track of actual iterations
+    results["sa_score_history"] = sa_score_history
+
+    # Record performance for dynamic threshold adjustment
+    dynamic_thresholds.record_performance(graph_size, "simulated_annealing", sa_time, sa_memory)
+
+    if queue:
+        acceptance_rate = (sa_accepts / sa_iterations * 100) if sa_iterations > 0 else 0
+        queue.put(("log", (f"SA completato: costo={sa_cost}, tempo={sa_time:.4f}s, " +
+                          f"iterazioni={sa_iterations}, chiamate={sa_cost_calls[0]}, accettazioni={sa_accepts} " +
+                          f"({acceptance_rate:.2f}%), violazioni={sa_violations}", "success")))
+
+    update_progress("Simulated Annealing", 100, "sa")
+
+    return results
+
+#==============================================================================
+#                           9. OTTIMIZZAZIONE E PARALLELISMO
+#==============================================================================
+def optimize_memory_usage(G):
+    """
+    Optimize graph memory usage by using more efficient data structures.
+
+    Args:
+        G (nx.Graph): The input graph.
+
+    Returns:
+        Tuple: Optimized graph, node mapping, and adjacency matrix.
+    """
+    # Relabel nodes to use integers for more efficient memory usage
+    mapping = {node: idx for idx, node in enumerate(G.nodes())}
+    G = nx.relabel_nodes(G, mapping)
+
+    # Convert to a sparse adjacency matrix
+    try:
+        # For newer NetworkX versions (2.8+)
+        adjacency_matrix = nx.to_scipy_sparse_array(G, format='csr')
+    except AttributeError:
+        # For older NetworkX versions
+        adjacency_matrix = nx.to_scipy_sparse_matrix(G, format='csr')
+
+    return G, mapping, adjacency_matrix
+
+
+
+def _enhanced_local_search_worker(G, initial_tree, max_degree, penalty, worker_id, stop_event, queue):
+    """
+    Enhanced worker function for parallel local search with better monitoring and communication.
+
+    Args:
+        G: NetworkX graph
+        initial_tree: Initial spanning tree solution
+        max_degree: Maximum degree constraint
+        penalty: Penalty for constraint violations
+        worker_id: Unique identifier for this worker
+        stop_event: Threading event for early termination
+        queue: Communication queue (not used in worker to avoid conflicts)
+
+    Returns:
+        tuple: (worker_id, best_tree, total_calls, score_history, execution_time)
+    """
+    start_time = time.time()
+
+    try:
+        # CRITICAL FIX: Validate and fix graph weights before starting
+        is_valid, num_fixed, errors = validate_graph_weights(G, fix_missing=True)
+        if num_fixed > 0:
+            logging.debug(f"Worker {worker_id}: Fixed {num_fixed} missing weights")
+
+        # Set unique random seed for diversity
+        random.seed(hash((worker_id, time.time())) % 2**32)
+        np.random.seed(hash((worker_id, time.time())) % 2**32)
+
+        # Execute local search with stop event monitoring
+        tree, calls, score_history = adaptive_neighborhood_local_search(
+            G, initial_tree.copy(), max_degree, penalty,
+            stop_event=stop_event, queue=None  # Don't pass queue to avoid conflicts
+        )
+
+        execution_time = time.time() - start_time
+        return worker_id, tree, calls, score_history, execution_time
+
+    except Exception as e:
+        logging.warning(f"Enhanced local search worker {worker_id} failed: {e}")
+        execution_time = time.time() - start_time
+        # Return initial tree as fallback
+        return worker_id, initial_tree.copy(), 0, [], execution_time
+
+def _create_perturbed_solution(G, initial_tree, max_degree, perturbation_level=0.1):
+    """
+    Create a perturbed version of the initial solution to provide diversity for parallel workers.
+
+    Args:
+        G: NetworkX graph
+        initial_tree: Initial spanning tree
+        max_degree: Maximum degree constraint
+        perturbation_level: Level of perturbation (0.0 to 1.0)
+
+    Returns:
+        NetworkX graph: Perturbed spanning tree
+    """
+    try:
+        perturbed_tree = initial_tree.copy()
+        num_edges = len(perturbed_tree.edges())
+        num_perturbations = max(1, int(num_edges * perturbation_level))
+
+        # Get all possible edges from the original graph
+        all_edges = list(G.edges())
+        tree_edges = set(perturbed_tree.edges())
+
+        for _ in range(num_perturbations):
+            # Try to make a small modification
+            if len(tree_edges) > 1:
+                # Remove a random edge
+                edge_to_remove = random.choice(list(tree_edges))
+                perturbed_tree.remove_edge(*edge_to_remove)
+                tree_edges.remove(edge_to_remove)
+
+                # Add a random edge that maintains connectivity
+                possible_edges = [e for e in all_edges if e not in tree_edges]
+                if possible_edges:
+                    edge_to_add = random.choice(possible_edges)
+                    perturbed_tree.add_edge(*edge_to_add)
+                    tree_edges.add(edge_to_add)
+
+                    # Check if still connected and is a tree
+                    if not nx.is_connected(perturbed_tree) or len(perturbed_tree.edges()) != len(G.nodes()) - 1:
+                        # Revert if not valid
+                        perturbed_tree.remove_edge(*edge_to_add)
+                        perturbed_tree.add_edge(*edge_to_remove)
+                        tree_edges.remove(edge_to_add)
+                        tree_edges.add(edge_to_remove)
+
+        return perturbed_tree
+
+    except Exception as e:
+        logging.warning(f"Failed to create perturbed solution: {e}")
+        return initial_tree.copy()
+
+def parallel_local_search(G, initial_tree, max_degree, penalty, num_threads=None, stop_event=None, queue=None):
+    """
+    Enhanced parallel version of the local search algorithm with adaptive scaling.
+
+    Features:
+    - Intelligent resource detection and adaptive worker calculation
+    - System classification-based scaling (workstation/desktop/laptop)
+    - Dynamic load balancing and progress monitoring
+    - Graceful degradation for large graphs or unstable systems
+    - Memory-efficient parallel execution with proper cleanup
+
+    Args:
+        G: NetworkX graph
+        initial_tree: Initial spanning tree solution
+        max_degree: Maximum degree constraint
+        penalty: Penalty for constraint violations
+        num_threads: Optional thread count override
+        stop_event: Threading event for early termination
+        queue: Communication queue for progress updates
+
+    Returns:
+        tuple: (best_tree, total_cost_calls, best_score_history)
+    """
+    start_time = time.time()
+    graph_size = len(G.nodes())
+
+    # Detect system resources and classify system type
+    try:
+        cpu_cores, total_ram_gb, available_ram_gb = detect_system_resources()
+        system_type, safety_margin, ram_efficiency = classify_system_type(cpu_cores, available_ram_gb)
+
+        if queue:
+            queue.put(("log", (f"🔍 System detected: {system_type.upper()} ({cpu_cores} cores, {available_ram_gb:.1f}GB available)", "info")))
+    except Exception as e:
+        logging.warning(f"Failed to detect system resources: {e}")
+        system_type = "laptop"
+        safety_margin = 0.5
+
+    # Use dynamic thresholds instead of static ones
+    dynamic_thresholds = get_dynamic_thresholds()
+    large_graph_threshold = dynamic_thresholds.get_threshold("sequential_force")
+    parallel_threshold = dynamic_thresholds.get_threshold("parallel_min")
+
+    # Log dynamic threshold usage
+    if queue:
+        queue.put(("log", (f"🎯 Using dynamic thresholds: parallel_min={parallel_threshold}, sequential_force={large_graph_threshold}", "info")))
+
+    # Check if graph is too large for parallel processing
+    if graph_size > large_graph_threshold:
+        if queue:
+            queue.put(("log", (f"Large graph detected ({graph_size} nodes > {large_graph_threshold}). Using sequential execution for stability.", "warning")))
+        return adaptive_neighborhood_local_search(G, initial_tree, max_degree, penalty, stop_event=stop_event, queue=queue)
+
+    # Check if graph is too small for parallel processing
+    if graph_size < parallel_threshold:
+        if queue:
+            queue.put(("log", (f"Small graph detected ({graph_size} nodes < {parallel_threshold}). Sequential execution is more efficient.", "info")))
+        return adaptive_neighborhood_local_search(G, initial_tree, max_degree, penalty, stop_event=stop_event, queue=queue)
+
+    # Implement gradual degradation based on memory pressure
+    memory_mgmt = adaptive_memory_management("parallel_local_search")
+
+    # Calculate optimal workers using adaptive scaling with memory considerations
+    if num_threads is None:
+        # Use operation-specific limits for local search
+        base_workers = calculate_optimal_workers(safety_margin=safety_margin, min_ram_per_worker=0.6)
+        max_workers = get_adaptive_max_workers_for_operation("general", base_workers)
+    else:
+        # Respect user override but apply safety limits
+        base_workers = calculate_optimal_workers(safety_margin=safety_margin, min_ram_per_worker=0.6)
+        max_workers = min(num_threads, get_adaptive_max_workers_for_operation("general", base_workers))
+
+    # Apply gradual degradation based on memory pressure
+    if memory_mgmt['action'] == 'emergency_cleanup':
+        max_workers = 1  # Force sequential
+        if queue:
+            queue.put(("log", (f"Emergency memory situation: forcing sequential execution", "warning")))
+    elif memory_mgmt['action'] == 'reduce_load':
+        max_workers = max(1, max_workers // 2)  # Reduce by half
+        if queue:
+            queue.put(("log", (f"High memory pressure: reducing workers to {max_workers}", "warning")))
+    elif memory_mgmt['action'] == 'proactive_cleanup':
+        max_workers = max(1, int(max_workers * 0.75))  # Reduce by 25%
+        if queue:
+            queue.put(("log", (f"Moderate memory pressure: reducing workers to {max_workers}", "info")))
+
+    # Additional safety checks based on graph size
+    if graph_size > 200:
+        max_workers = min(max_workers, 3)  # Conservative for medium-large graphs
+    if graph_size > 100:
+        max_workers = min(max_workers, 4)  # Moderate for medium graphs
+
+    # Ensure minimum of 1 worker
+    max_workers = max(1, max_workers)
+
+    # Perform proactive cleanup if needed
+    if memory_mgmt['cleanup_needed']:
+        cleanup_stats = proactive_memory_cleanup(memory_mgmt['aggressive_cleanup'])
+        if queue and cleanup_stats.get('memory_freed_mb', 0) > 5:
+            queue.put(("log", (f"Proactive cleanup freed {cleanup_stats['memory_freed_mb']:.1f}MB", "info")))
+
+    # Check system stability before proceeding
+    is_stable, stability_message = check_system_stability()
+    if not is_stable:
+        if queue:
+            queue.put(("log", (f"System instability detected: {stability_message}. Using sequential local search.", "warning")))
+        return adaptive_neighborhood_local_search(G, initial_tree, max_degree, penalty, stop_event=stop_event, queue=queue)
+
+    # Monitor CPU and adjust workers if needed
+    max_workers = adaptive_worker_adjustment(max_workers, cpu_threshold=75.0)
+
+    # Final check: if only 1 worker, use sequential
+    if max_workers <= 1:
+        if queue:
+            queue.put(("log", ("Optimal worker count is 1. Using sequential execution.", "info")))
+        return adaptive_neighborhood_local_search(G, initial_tree, max_degree, penalty, stop_event=stop_event, queue=queue)
+
+    # Log parallel execution details
+    if queue:
+        queue.put(("log", (f"🚀 Starting parallel local search: {max_workers} workers, {graph_size} nodes ({system_type} mode)", "info")))
+
+    logging.info(f"Enhanced parallel local search: {max_workers} workers, {graph_size} nodes, {system_type} system")
+
+    results = []
+    total_calls = 0
+    best_score_history = []
+
+    try:
+        # Use ThreadPoolExecutor for better resource management and communication
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="LocalSearch") as executor:
+            # Create diverse initial solutions for each worker
+            initial_solutions = []
+            for i in range(max_workers):
+                if i == 0:
+                    # First worker uses the provided initial tree
+                    initial_solutions.append(initial_tree.copy())
+                else:
+                    # Other workers use slightly perturbed versions
+                    perturbed_tree = _create_perturbed_solution(G, initial_tree, max_degree, perturbation_level=0.1)
+                    initial_solutions.append(perturbed_tree)
+
+            # Submit tasks with different starting points
+            futures = []
+            for i, init_tree in enumerate(initial_solutions):
+                future = executor.submit(
+                    _enhanced_local_search_worker,
+                    G, init_tree, max_degree, penalty, i, stop_event, queue
+                )
+                futures.append(future)
+
+            # Collect results with timeout and progress monitoring
+            completed_workers = 0
+            timeout_per_worker = adaptive_timeout_calculation(graph_size, base_timeout=180)  # 3 minutes base
+
+            for future in concurrent.futures.as_completed(futures, timeout=timeout_per_worker * max_workers):
+                if stop_event and stop_event.is_set():
+                    # Cancel remaining futures
+                    for f in futures:
+                        f.cancel()
+                    break
+
+                try:
+                    worker_id, tree, calls, score_history, worker_time = future.result(timeout=timeout_per_worker)
+                    results.append((tree, calls, score_history))
+                    total_calls += calls
+                    completed_workers += 1
+
+                    # Update best score history
+                    if len(score_history) > len(best_score_history):
+                        best_score_history = score_history
+
+                    # Calculate current best cost for progress reporting
+                    current_cost = calculate_cost_local(tree, max_degree, penalty)
+
+                    # Monitor memory usage during execution
+                    if completed_workers % max(1, max_workers // 2) == 0:
+                        memory_check = adaptive_memory_management("parallel_local_search")
+                        if memory_check['action'] == 'emergency_cleanup':
+                            # Emergency situation - cancel remaining workers
+                            for f in futures:
+                                f.cancel()
+                            if queue:
+                                queue.put(("log", ("Emergency memory situation: cancelling remaining workers", "warning")))
+                            break
+                        elif memory_check['cleanup_needed']:
+                            # Perform cleanup during execution
+                            cleanup_stats = proactive_memory_cleanup(memory_check['aggressive_cleanup'])
+                            if queue and cleanup_stats.get('memory_freed_mb', 0) > 5:
+                                queue.put(("log", (f"Runtime cleanup freed {cleanup_stats['memory_freed_mb']:.1f}MB", "info")))
+
+                    if queue:
+                        queue.put(("log", (f"Worker {worker_id} completed: cost={current_cost}, calls={calls}, time={worker_time:.2f}s", "info")))
+
+                except concurrent.futures.TimeoutError:
+                    logging.warning(f"Local search worker timed out after {timeout_per_worker}s")
+                    if queue:
+                        queue.put(("log", (f"Worker timed out after {timeout_per_worker}s", "warning")))
+                except Exception as e:
+                    logging.warning(f"Local search worker failed: {e}")
+                    if queue:
+                        queue.put(("log", (f"Worker failed: {str(e)}", "warning")))
+
+        # Process results and find the best solution
+        if results:
+            # Find best result based on cost
+            best_result = min(results, key=lambda x: calculate_cost_local(x[0], max_degree, penalty))
+            best_tree, best_calls, best_history = best_result
+            best_cost = calculate_cost_local(best_tree, max_degree, penalty)
+
+            # Calculate performance metrics
+            total_time = time.time() - start_time
+            avg_calls_per_worker = total_calls / len(results) if results else 0
+
+            if queue:
+                queue.put(("log", (f"✅ Parallel local search completed: {completed_workers}/{max_workers} workers, best cost={best_cost}", "success")))
+                queue.put(("log", (f"📊 Performance: {total_calls} total calls, {avg_calls_per_worker:.0f} avg/worker, {total_time:.2f}s total", "info")))
+
+            return best_tree, total_calls, best_history
+        else:
+            # No results obtained, fallback to sequential
+            if queue:
+                queue.put(("log", ("No parallel results obtained, falling back to sequential", "warning")))
+            return adaptive_neighborhood_local_search(G, initial_tree, max_degree, penalty, stop_event=stop_event, queue=queue)
+
+    except Exception as e:
+        logging.error(f"Enhanced parallel local search failed: {e}")
+        if queue:
+            queue.put(("log", (f"Parallel execution failed: {str(e)}. Using sequential fallback.", "error")))
+
+        # Emergency cleanup and fallback
+        emergency_resource_cleanup()
+        return adaptive_neighborhood_local_search(G, initial_tree, max_degree, penalty, stop_event=stop_event, queue=queue)
+
+#==============================================================================
+#                           9. VALUTAZIONE E PUNTEGGIO
+#==============================================================================
+def evaluate_solution(solution, reference_values):
+    """
+    Restituisce un punteggio normalizzato su 100 (più alto = migliore).
+    Pesa nell'ordine: costo, violazioni, tempo, memoria.
+
+    Args:
+        solution (dict): Dizionario con chiavi 'cost', 'violations', 'execution_time', 'memory'
+        reference_values (dict): Valori di riferimento per normalizzazione con chiavi
+                                'max_cost', 'max_violations', 'max_time', 'max_memory'
+
+    Returns:
+        float: Punteggio normalizzato su 100 (più alto = migliore)
+    """
+    score = 100.0
+
+    def penalize(value, max_val, weight):
+        """Calcola la penalità normalizzata per una metrica."""
+        if max_val == 0 or value == 0:
+            return 0
+        return weight * (value / max_val)
+
+    # Normalizza rispetto al massimo osservato per ciascuna metrica
+    # Pesi: costo (40%), violazioni (30%), tempo (20%), memoria (10%)
+    cost_penalty = penalize(solution["cost"], reference_values["max_cost"], 40.0)
+    viol_penalty = penalize(solution["violations"], reference_values["max_violations"], 30.0)
+    time_penalty = penalize(solution["execution_time"], reference_values["max_time"], 20.0)
+    memory_penalty = penalize(solution["memory"], reference_values["max_memory"], 10.0)
+
+    # Sottrai le penalità dal punteggio base
+    score -= (cost_penalty + viol_penalty + time_penalty + memory_penalty)
+
+    # Assicurati che il punteggio sia sempre positivo
+    score = max(score, 0.0)
+
+    return round(score, 2)
+
+def count_constraint_violations(tree, max_children):
+    """
+    Conta il numero di nodi che violano i vincoli di grado.
+    Questa è la funzione centralizzata per il calcolo delle violazioni.
+
+    Args:
+        tree: Spanning tree
+        max_children: Numero massimo di figli consentiti
+
+    Returns:
+        int: Numero di nodi che violano i vincoli
+    """
+    violations = 0
+    for node in tree.nodes():
+        children = [child for child in tree.neighbors(node)
+                   if tree.degree(child) < tree.degree(node)]
+        if len(children) > max_children:
+            violations += 1
+    return violations
+
+def get_violating_nodes(tree, max_children):
+    """
+    Restituisce la lista dei nodi che violano i vincoli di grado.
+    Funzione di supporto per evitare duplicazione di codice.
+
+    Args:
+        tree: Spanning tree
+        max_children: Numero massimo di figli consentiti
+
+    Returns:
+        list: Lista di nodi che violano i vincoli
+    """
+    violating_nodes = []
+    for node in tree.nodes():
+        children = [child for child in tree.neighbors(node)
+                   if tree.degree(child) < tree.degree(node)]
+        if len(children) > max_children:
+            violating_nodes.append(node)
+    return violating_nodes
+
+def test_violations_consistency(tree, max_children):
+    """
+    Funzione di test per verificare la coerenza del calcolo delle violazioni.
+    Confronta il risultato della funzione centralizzata con un calcolo diretto.
+
+    Args:
+        tree: Spanning tree da testare
+        max_children: Numero massimo di figli consentiti
+
+    Returns:
+        bool: True se i calcoli sono coerenti, False altrimenti
+    """
+    # Calcolo con funzione centralizzata
+    violations_centralized = count_constraint_violations(tree, max_children)
+    violating_nodes_centralized = get_violating_nodes(tree, max_children)
+
+    # Calcolo diretto per verifica
+    violations_direct = 0
+    violating_nodes_direct = []
+
+    for node in tree.nodes():
+        children = [child for child in tree.neighbors(node)
+                   if tree.degree(child) < tree.degree(node)]
+        if len(children) > max_children:
+            violations_direct += 1
+            violating_nodes_direct.append(node)
+
+    # Verifica coerenza
+    count_consistent = violations_centralized == violations_direct
+    nodes_consistent = set(violating_nodes_centralized) == set(violating_nodes_direct)
+
+    if not count_consistent or not nodes_consistent:
+        logging.error(f"INCONSISTENZA RILEVATA nel calcolo delle violazioni!")
+        logging.error(f"Violazioni centralizzate: {violations_centralized}")
+        logging.error(f"Violazioni dirette: {violations_direct}")
+        logging.error(f"Nodi violanti centralizzati: {violating_nodes_centralized}")
+        logging.error(f"Nodi violanti diretti: {violating_nodes_direct}")
+        return False
+
+    return True

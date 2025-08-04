@@ -51,14 +51,37 @@ from .config import (
     EMERGENCY_CLEANUP_CPU_THRESHOLD
 )
 
-# Memory profiling for precise memory measurement
+# FIXED: Enhanced memory profiling with safe import handling
 try:
     from memory_profiler import memory_usage
     MEMORY_PROFILER_AVAILABLE = True
     logging.info("memory_profiler available for precise memory measurement")
+
+    # Test memory_profiler functionality
+    def _test_memory_profiler():
+        """Test if memory_profiler is working correctly."""
+        try:
+            # Simple test function
+            def test_func():
+                return [1, 2, 3]
+
+            # Try to measure memory usage
+            mem_usage = memory_usage((test_func, ()))
+            return len(mem_usage) > 0
+        except Exception:
+            return False
+
+    # Verify memory_profiler is actually working
+    if not _test_memory_profiler():
+        MEMORY_PROFILER_AVAILABLE = False
+        logging.warning("memory_profiler installed but not functioning correctly, falling back to psutil")
+
 except ImportError:
     MEMORY_PROFILER_AVAILABLE = False
     logging.warning("memory_profiler not available, falling back to psutil for memory measurement")
+except Exception as e:
+    MEMORY_PROFILER_AVAILABLE = False
+    logging.warning(f"memory_profiler import failed with error: {e}, falling back to psutil")
 
 # All operations use CPU-only optimizations for maximum stability
 
@@ -3297,18 +3320,56 @@ def validate_solution(graph, solution):
 
 def evaluate_solution(solution: Dict[str, Any], constraints: Dict[str, Any]) -> float:
     """
-    Valutare la qualità di una soluzione.
+    Evaluate the quality of a solution based on multiple criteria.
 
-    Questa è una funzione segnaposto: implementala in base ai tuoi obiettivi di ottimizzazione specifici.
+    FIXED: Proper implementation that calculates meaningful scores based on:
+    - Cost (lower is better)
+    - Execution time (lower is better)
+    - Memory usage (lower is better)
+    - Constraint violations (lower is better)
+
+    Args:
+        solution: Dictionary with cost, execution_time, memory, violations
+        constraints: Dictionary with max values for normalization
+
+    Returns:
+        float: Score where higher values indicate better solutions
     """
     score = 0.0
-    # Implementa qui la logica di valutazione della soluzione
-    # Un punteggio più alto indica una soluzione migliore
 
-    # Esempio: valutazione in base all'efficienza dell'utilizzo della memoria
-    if "memory_usage" in solution and "target_memory" in constraints:
-        efficiency = min(solution["memory_usage"] / constraints["target_memory"], 1.0)
-        score += efficiency * 100
+    # Get solution metrics
+    cost = solution.get("cost", float('inf'))
+    exec_time = solution.get("execution_time", float('inf'))
+    memory = solution.get("memory", float('inf'))
+    violations = solution.get("violations", float('inf'))
+
+    # Get reference values for normalization
+    max_cost = constraints.get("max_cost", 1.0)
+    max_time = constraints.get("max_time", 1.0)
+    max_memory = constraints.get("max_memory", 1.0)
+    max_violations = constraints.get("max_violations", 1.0)
+
+    # Avoid division by zero
+    max_cost = max(max_cost, 1.0)
+    max_time = max(max_time, 1.0)
+    max_memory = max(max_memory, 1.0)
+    max_violations = max(max_violations, 1.0)
+
+    # Calculate normalized scores (inverted so lower values get higher scores)
+    # Cost is the most important factor (50% weight)
+    cost_score = (1.0 - min(cost / max_cost, 1.0)) * 50.0
+
+    # Violations are critical (30% weight)
+    violation_score = (1.0 - min(violations / max_violations, 1.0)) * 30.0
+
+    # Time efficiency (15% weight)
+    time_score = (1.0 - min(exec_time / max_time, 1.0)) * 15.0
+
+    # Memory efficiency (5% weight)
+    memory_score = (1.0 - min(memory / max_memory, 1.0)) * 5.0
+
+    # Total score
+    score = cost_score + violation_score + time_score + memory_score
 
     return score
 
@@ -3376,248 +3437,347 @@ def is_dcst(_, tree_edges, degree_constraints):
 #                           5. ALGORITMI PRINCIPALI
 #==============================================================================
 
+#==============================================================================
+#                           UNION-FIND DATA STRUCTURE
+#==============================================================================
+
+class UnionFind:
+    """
+    Union-Find (Disjoint Set Union) data structure with path compression and union by rank.
+    Used for efficient cycle detection in graph algorithms.
+    """
+
+    def __init__(self, nodes):
+        """
+        Initialize Union-Find structure.
+
+        Args:
+            nodes: Iterable of node identifiers
+        """
+        self.parent = {node: node for node in nodes}
+        self.rank = {node: 0 for node in nodes}
+        self.components = len(nodes)
+
+    def find(self, node):
+        """
+        Find the root of the component containing node with path compression.
+
+        Args:
+            node: Node to find root for
+
+        Returns:
+            Root node of the component
+        """
+        if self.parent[node] != node:
+            self.parent[node] = self.find(self.parent[node])  # Path compression
+        return self.parent[node]
+
+    def union(self, node1, node2):
+        """
+        Union two components containing node1 and node2.
+
+        Args:
+            node1, node2: Nodes to union
+
+        Returns:
+            bool: True if union was performed (nodes were in different components)
+        """
+        root1 = self.find(node1)
+        root2 = self.find(node2)
+
+        if root1 == root2:
+            return False  # Already in same component
+
+        # Union by rank
+        if self.rank[root1] < self.rank[root2]:
+            self.parent[root1] = root2
+        elif self.rank[root1] > self.rank[root2]:
+            self.parent[root2] = root1
+        else:
+            self.parent[root2] = root1
+            self.rank[root1] += 1
+
+        self.components -= 1
+        return True
+
+    def connected(self, node1, node2):
+        """
+        Check if two nodes are in the same component.
+
+        Args:
+            node1, node2: Nodes to check
+
+        Returns:
+            bool: True if nodes are connected
+        """
+        return self.find(node1) == self.find(node2)
+
+    def num_components(self):
+        """
+        Get the number of connected components.
+
+        Returns:
+            int: Number of components
+        """
+        return self.components
+
+#==============================================================================
+#                           NEW STANDARDIZED ALGORITHMS
+#==============================================================================
+
 def greedy_spanning_tree(G, max_children=float('inf'), penalty=1000):
     """
-    Genera un albero di copertura usando un algoritmo greedy modificato.
+    Modified Kruskal's algorithm for Degree-Constrained Minimum Spanning Tree (DCMST).
 
-    Parameters:
-    - G: Grafo da cui generare l'albero
-    - max_children: Limite superiore per il numero di figli dei nodi nell'albero
-    - penalty: Penalizzazione per le aree che violano il limite di figli
+    Implementation Requirements:
+    - Sort all edges by increasing weight
+    - Initialize Union-Find structure for cycle detection
+    - Maintain degree array for each node tracking current degrees
+    - For each edge (u,v) in sorted order:
+      - If degree[u] < degree_limit[u] AND degree[v] < degree_limit[v]
+      - AND u and v are not already connected (check via Union-Find)
+      - Then: add edge, update degrees, union components
+    - Terminate when you have n-1 edges or exhaust available edges
+
+    Args:
+        G: Input graph
+        max_children: Maximum degree constraint for each node
+        penalty: Penalty for constraint violations
 
     Returns:
-    - T: Albero di copertura generato
+        tuple: (spanning_tree, total_cost)
     """
     global greedy_cost_calls
-    greedy_cost_calls[0] += 1
 
-    if not G:
-        return nx.Graph()
+    if not G or len(G.nodes()) == 0:
+        return nx.Graph(), 0
 
-    # Inizializza un albero vuoto e traccia i gradi dei nodi
+    # Initialize spanning tree
     T = nx.Graph()
     T.add_nodes_from(G.nodes())
-    children_count = {node: 0 for node in G.nodes()}
 
-    # Inizia con un nodo casuale (o il primo)
-    nodes = list(G.nodes())
-    start_node = nodes[0]
+    # Sort all edges by weight (ascending)
+    edges = []
+    for u, v, data in G.edges(data=True):
+        weight = data.get('weight', 1)
+        edges.append((weight, u, v))
+    edges.sort()  # Sort by weight
 
-    # Tieni traccia dei bordi da considerare
-    candidate_edges = []
-    visited = {start_node}
+    # Initialize Union-Find structure
+    uf = UnionFind(G.nodes())
 
-    # Aggiungi tutti i bordi dal nodo iniziale all'elenco dei candidati
-    for neighbor, edge_data in G[start_node].items():
-        weight = edge_data.get('weight', 1)
-        heapq.heappush(candidate_edges, (weight, start_node, neighbor))
+    # Initialize degree tracking
+    degree = {node: 0 for node in G.nodes()}
 
-    # Fai crescere l'albero usando l'algoritmo di Prim modificato
-    while candidate_edges and len(visited) < len(G.nodes()):
-        weight, u, v = heapq.heappop(candidate_edges)
+    # Set degree limits (handle both uniform and per-node limits)
+    if isinstance(max_children, dict):
+        degree_limit = max_children
+    else:
+        degree_limit = {node: max_children for node in G.nodes()}
 
-        # Salta se entrambi i nodi sono già nell'albero
-        if v in visited:
+    edges_added = 0
+    target_edges = len(G.nodes()) - 1  # n-1 edges for spanning tree
+
+    # Process edges in order of increasing weight
+    for weight, u, v in edges:
+        # Check degree constraints
+        if degree[u] >= degree_limit.get(u, max_children):
+            continue
+        if degree[v] >= degree_limit.get(v, max_children):
             continue
 
-        # Controlla se aggiungere l'arco viola i vincoli sui figli
-        children_u = [child for child in T.neighbors(u) if T.degree(child) < T.degree(u)]
-        children_v = [child for child in T.neighbors(v) if T.degree(child) < T.degree(v)]
-
-        if len(children_u) < max_children and len(children_v) < max_children:
-            # Aggiungi l'arco all'albero
-            weight = safe_get_edge_weight(G, u, v, default_weight=1)
+        # Check if adding this edge would create a cycle
+        if not uf.connected(u, v):
+            # Add edge to spanning tree
             T.add_edge(u, v, weight=weight)
-            children_count[u] += 1
-            children_count[v] += 1
-            visited.add(v)
 
-            # Aggiungi un nuovo nodo ai candidati
-            for neighbor, edge_data in G[v].items():
-                if neighbor not in visited:
-                    weight = edge_data.get('weight', 1)
-                    heapq.heappush(candidate_edges, (weight, v, neighbor))
+            # Update Union-Find structure
+            uf.union(u, v)
 
-    # Calcola il costo totale utilizzando la funzione calcola_costo aggiornata
+            # Update degrees
+            degree[u] += 1
+            degree[v] += 1
+
+            edges_added += 1
+
+            # Check if we have a complete spanning tree
+            if edges_added == target_edges:
+                break
+
+    # Calculate total cost
     total_cost = calculate_cost_greedy(T, max_children, penalty)
+
     return T, total_cost
 
 def adaptive_neighborhood_local_search(G, initial_tree, max_children, penalty, max_iterations=5000, stop_event=None, queue=None, callback=None):
-    # ENHANCED: Automatic parameter adaptation for large instances with adaptive thresholds
-    num_nodes = len(G.nodes)
-    original_max_iterations = max_iterations
-    original_neighborhood_size = 1
+    """
+    Hill Climbing (First Improvement Local Search) for DCMST.
 
-    # IMPROVEMENT: Calculate adaptive thresholds based on graph size and max_iterations
-    def calculate_adaptive_thresholds(num_nodes, max_iterations):
-        """
-        Calculate adaptive thresholds for iterations without improvement based on graph size.
+    Implementation Requirements:
+    - Generate initial solution using modified greedy Kruskal
+    - Repeat until no improvement found:
+      - For each edge in current spanning tree:
+        - Remove it temporarily (creating two components)
+        - For each edge not in tree that reconnects the two components:
+          - If it respects degree constraints AND has lower cost
+          - Apply the swap and proceed to next iteration (first improvement)
+      - If no swap improves solution: terminate (local optimum reached)
 
-        Approach:
-        - Calculate thresholds as percentages of max_iterations
-        - Increase tolerance progressively for larger instances
-        - Maintain minimum thresholds for small instances to preserve efficiency
-        """
-        # OPTIMIZATION: More aggressive thresholds for faster early stopping
-        if num_nodes < 50:
-            # Small graphs: very aggressive early stopping
-            neighborhood_threshold = 5   # reduced from 10
-            reset_threshold = 10          # reduced from 20
-            termination_threshold = 15    # reduced from 30
-        elif num_nodes < 100:
-            # Medium graphs: aggressive early stopping
-            neighborhood_threshold = max(5, int(max_iterations * 0.005))   # 0.5% (reduced from 0.8%)
-            reset_threshold = max(10, int(max_iterations * 0.010))         # 1.0% (reduced from 1.5%)
-            termination_threshold = max(20, int(max_iterations * 0.015))   # 1.5% (reduced from 2.5%)
-        elif num_nodes < 200:
-            # Large graphs: moderate early stopping
-            neighborhood_threshold = max(8, int(max_iterations * 0.008))   # 0.8% (reduced from 1.2%)
-            reset_threshold = max(20, int(max_iterations * 0.015))         # 1.5% (reduced from 2.5%)
-            termination_threshold = max(35, int(max_iterations * 0.025))   # 2.5% (reduced from 4.0%)
-        else:
-            # Very large graphs: still adaptive but more aggressive
-            neighborhood_threshold = max(12, int(max_iterations * 0.010))  # 1.0% (reduced from 1.5%)
-            reset_threshold = max(25, int(max_iterations * 0.020))         # 2.0% (reduced from 3.5%)
-            termination_threshold = max(50, int(max_iterations * 0.035))   # 3.5% (reduced from 6.0%)
+    Args:
+        G: Input graph
+        initial_tree: Starting tree solution
+        max_children: Maximum degree constraint
+        penalty: Penalty for constraint violations
+        max_iterations: Maximum number of iterations
+        stop_event: Threading event to signal termination
+        queue: Queue for GUI communication
+        callback: Progress callback function
 
-        # Ensure logical ordering: neighborhood < reset < termination
-        reset_threshold = max(reset_threshold, neighborhood_threshold + 5)
-        termination_threshold = max(termination_threshold, reset_threshold + 10)
+    Returns:
+        tuple: (best_tree, cost_calls, score_history)
+    """
+    global local_search_cost_calls
 
-        return neighborhood_threshold, reset_threshold, termination_threshold
-
-    if num_nodes >= 1000:
-        # Increase max_iterations to handle larger search spaces
-        max_iterations = max(max_iterations * 2, 10000)  # At least double, minimum 10000
-        max_iterations = min(max_iterations, 20000)  # Cap at 20000 to prevent excessive computation
-
-        # Reduce neighborhood_size to 1 to limit computational complexity
-        initial_neighborhood_size = 1
-
-        # Log warning about parameter adaptation
-        warning_msg = (f"Large instance detected ({num_nodes} nodes). "
-                      f"Adapting Local Search parameters: "
-                      f"max_iterations: {original_max_iterations} → {max_iterations}, "
-                      f"neighborhood_size: {original_neighborhood_size} → {initial_neighborhood_size}")
-        logging.warning(warning_msg)
-
-        if queue:
-            queue.put(("log", (warning_msg, "warning")))
-    else:
-        initial_neighborhood_size = 1
-
-    # IMPROVEMENT: Calculate adaptive thresholds for this instance
-    neighborhood_threshold, reset_threshold, termination_threshold = calculate_adaptive_thresholds(num_nodes, max_iterations)
-
-    # Log adaptive thresholds for transparency
-    thresholds_msg = (f"Adaptive thresholds for {num_nodes} nodes: "
-                     f"neighborhood={neighborhood_threshold}, "
-                     f"reset={reset_threshold}, "
-                     f"termination={termination_threshold}")
-    logging.info(thresholds_msg)
-
-    if queue:
-        queue.put(("log", (thresholds_msg, "info")))
+    if not initial_tree or len(initial_tree.nodes()) == 0:
+        # Generate initial solution using greedy algorithm
+        initial_tree, _ = greedy_spanning_tree(G, max_children, penalty)
 
     current_tree = initial_tree.copy()
     best_tree = current_tree.copy()
     best_cost = calculate_cost_local(best_tree, max_children, penalty)
 
-    # Imposta la dimensione iniziale del quartiere
-    neighborhood_size = initial_neighborhood_size
-    iterations_without_improvement = 0
-
-    cost_calls = local_search_cost_calls[0]  # Manteniamo il valore del contatore
-
-    # Inizializza lo storico dei punteggi per il grafico temporale
+    cost_calls = local_search_cost_calls[0]
     score_history = []
     start_time = time.time()
+    iteration = 0
 
-    for iteration in range(max_iterations):
+    # Set degree limits
+    if isinstance(max_children, dict):
+        degree_limit = max_children
+    else:
+        degree_limit = {node: max_children for node in G.nodes()}
+
+    while iteration < max_iterations:
         if stop_event and stop_event.is_set():
             break
 
-        # Aggiorna la GUI se la coda esiste
+        # Update GUI periodically
         if queue and iteration % 10 == 0:
             queue.put(("iter", f"{iteration}/{max_iterations}"))
             queue.put(("cost", best_cost))
 
-        # Se viene fornita una richiamata, utilizzala per segnalare l'avanzamento
-        if callback:
-            improved = False
-            if iteration % 5 == 0:  # Report ogni 5 iterazioni
-                message = f"Iteration {iteration}/{max_iterations}"
-                callback(message, best_cost, queue=queue, improved=improved)
+        # Progress callback
+        if callback and iteration % 5 == 0:
+            message = f"Iteration {iteration}/{max_iterations}"
+            callback(message, best_cost, queue=queue, improved=False)
 
-        # Raccoglie dati dettagliati ogni 5 iterazioni per il grafico temporale
+        # Collect data for score history
         if iteration % 5 == 0:
             violations = count_constraint_violations(current_tree, max_children)
             current_time = time.time() - start_time
             current_cost = calculate_cost_local(current_tree, max_children, penalty)
 
-            # Salva dati completi per normalizzazione successiva
             score_data = {
                 "cost": current_cost,
                 "execution_time": current_time,
-                "memory": 0,  # Placeholder per la memoria
+                "memory": 0,
                 "violations": violations
             }
             score_history.append((iteration, score_data))
 
-        # Trova i nodi che violano i vincoli di grado
-        constrained_nodes = get_violating_nodes(current_tree, max_children)
+        improvement_found = False
 
-        if not constrained_nodes:
-            # Se nessun vincolo viene violato, prova gli scambi casuali per migliorare i costi
-            improvement_made = try_random_edge_swap(G, current_tree, max_children, penalty, neighborhood_size)
-            cost_calls += neighborhood_size * 2  # Ogni tentativo di scambio valuta almeno 2 stati, moltiplicato per neighborhood_size
-            if not improvement_made:
-                iterations_without_improvement += 1
-            else:
-                iterations_without_improvement = 0
-                if callback:
-                    callback(iteration, best_cost, queue=queue, improved=True)
-        else:
-            # Prova a correggere le violazioni dei vincoli con tentativi multipli
-            improvement_made = fix_constraint_violations(G, current_tree, constrained_nodes, max_children, penalty, neighborhood_size)
-            cost_calls += neighborhood_size * len(constrained_nodes) * 2  # Ogni tentativo per nodo valuta almeno 2 stati
-            if not improvement_made:
-                iterations_without_improvement += 1
-            else:
-                iterations_without_improvement = 0
+        # Try to improve by swapping edges (first improvement)
+        tree_edges = list(current_tree.edges())
 
-        # Calcola il costo attuale
-        current_cost = calculate_cost_local(current_tree, max_children, penalty)
-        cost_calls += 1
+        for u, v in tree_edges:
+            if improvement_found:
+                break
 
-        # Aggiorna la soluzione migliore se migliore
-        if current_cost < best_cost:
-            best_tree = current_tree.copy()
-            best_cost = current_cost
-            iterations_without_improvement = 0
-            if callback:
-                callback(iteration, best_cost, queue=queue, improved=True)
+            # Remove edge temporarily
+            current_tree.remove_edge(u, v)
 
-        # IMPROVEMENT: Use adaptive thresholds instead of fixed values
-        # Adattare le dimensioni del quartiere in base ai progressi
-        if iterations_without_improvement > neighborhood_threshold:
-            neighborhood_size = min(neighborhood_size + 1, 5)  # Incrementa gradualmente fino a 5 nodi
-        elif iterations_without_improvement > reset_threshold:
-            # Se bloccato, prova a ridurre le dimensioni dell'intorno
-            current_tree = best_tree.copy()
-            neighborhood_size = 1
-            iterations_without_improvement = 0
+            # Find the two components created
+            try:
+                components = list(nx.connected_components(current_tree))
+                if len(components) != 2:
+                    # Restore edge and continue
+                    weight = safe_get_edge_weight(G, u, v, default_weight=1)
+                    current_tree.add_edge(u, v, weight=weight)
+                    continue
 
-        # IMPROVEMENT: Use adaptive termination threshold
-        # Condizione di arresto anticipato
-        if iterations_without_improvement > termination_threshold:
+                comp1, comp2 = components
+
+                # Find edges that can reconnect the components
+                for n1 in comp1:
+                    if improvement_found:
+                        break
+                    for n2 in comp2:
+                        if improvement_found:
+                            break
+
+                        # Skip the original edge
+                        if (n1, n2) == (u, v) or (n2, n1) == (u, v):
+                            continue
+
+                        # Check if this edge exists in the original graph
+                        if not G.has_edge(n1, n2):
+                            continue
+
+                        # Check degree constraints
+                        current_degree_n1 = current_tree.degree(n1)
+                        current_degree_n2 = current_tree.degree(n2)
+
+                        if current_degree_n1 >= degree_limit.get(n1, max_children):
+                            continue
+                        if current_degree_n2 >= degree_limit.get(n2, max_children):
+                            continue
+
+                        # Add the new edge temporarily
+                        weight = safe_get_edge_weight(G, n1, n2, default_weight=1)
+                        current_tree.add_edge(n1, n2, weight=weight)
+
+                        # Calculate new cost
+                        new_cost = calculate_cost_local(current_tree, max_children, penalty)
+                        cost_calls += 1
+
+                        # Check if this is an improvement
+                        if new_cost < best_cost:
+                            # First improvement found - accept it
+                            best_tree = current_tree.copy()
+                            best_cost = new_cost
+                            improvement_found = True
+
+                            if callback:
+                                callback(iteration, best_cost, queue=queue, improved=True)
+                            break
+                        else:
+                            # Remove the test edge
+                            current_tree.remove_edge(n1, n2)
+
+                # If no improvement found, restore the original edge
+                if not improvement_found:
+                    weight = safe_get_edge_weight(G, u, v, default_weight=1)
+                    current_tree.add_edge(u, v, weight=weight)
+
+            except Exception as e:
+                # Restore edge on error
+                if not current_tree.has_edge(u, v):
+                    weight = safe_get_edge_weight(G, u, v, default_weight=1)
+                    current_tree.add_edge(u, v, weight=weight)
+                logging.warning(f"Error in hill climbing: {e}")
+
+        # If no improvement found, we've reached a local optimum
+        if not improvement_found:
             if queue:
-                queue.put(("log", (f"Local Search terminated: {iterations_without_improvement} iterations without improvement (threshold: {termination_threshold})", "info")))
+                queue.put(("log", (f"Hill Climbing terminated: local optimum reached at iteration {iteration}", "info")))
             break
 
-    # Report finale
+        iteration += 1
+
+    # Final report
     if queue:
-        queue.put(("log", (f"Local Search completata: {iteration+1} iterazioni, {cost_calls} chiamate alla funzione di costo", "info")))
+        queue.put(("log", (f"Hill Climbing completed: {iteration+1} iterations, {cost_calls} cost function calls", "info")))
 
     local_search_cost_calls[0] = cost_calls
 
@@ -3625,417 +3785,185 @@ def adaptive_neighborhood_local_search(G, initial_tree, max_children, penalty, m
 
 def simulated_annealing_spanning_tree(G, max_children=3, penalty=1000, max_iterations=10000, initial_temperature=200, cooling_rate=0.98, stop_event=None, queue=None, return_stats=False, initial_tree=None, progress_callback=None, greedy_tree=None):
     """
-    Enhanced Simulated Annealing algorithm for finding optimal degree-constrained spanning trees.
-    Uses adaptive cooling/reheating and improved neighbor generation strategies.
+    Simulated Annealing algorithm for DCMST.
 
-    ENHANCEMENT: Now intelligently selects the best starting solution from available options:
-    - Compares local search result vs greedy result when both are provided
-    - Always starts from the solution with the lowest cost
-    - Ensures optimal initialization for better convergence
+    Implementation Requirements:
+    - Generate initial solution using greedy algorithm
+    - Set initial temperature T (e.g., 100), cooling factor α (e.g., 0.95)
+    - While T > minimum_threshold:
+      - For fixed_number_iterations at current temperature:
+        - Generate neighbor using random edge swap
+        - If neighbor is valid: calculate cost difference Δ
+        - If Δ < 0 OR random() < exp(-Δ/T): accept the move
+      - Reduce temperature: T = T × α
+    - Return best solution found during entire process
 
     Args:
-        G (networkx.Graph): Input graph
-        max_children (int): Maximum number of children per node
-        penalty (int): Penalty value for constraint violations
-        max_iterations (int): Maximum number of iterations
-        initial_temperature (float): Initial temperature
-        cooling_rate (float): Rate at which temperature decreases
-        stop_event (threading.Event): Event to signal algorithm termination
-        queue (queue.Queue): Queue for GUI communication
-        return_stats (bool): Whether to return detailed statistics
-        initial_tree (networkx.Graph): Initial tree (usually from local search)
-        progress_callback: Callback for progress updates
-        greedy_tree (networkx.Graph): Greedy solution tree for comparison
+        G: Input graph
+        max_children: Maximum degree constraint
+        penalty: Penalty for constraint violations
+        max_iterations: Maximum number of iterations
+        initial_temperature: Starting temperature
+        cooling_rate: Temperature reduction factor
+        stop_event: Threading event to signal termination
+        queue: Queue for GUI communication
+        return_stats: Whether to return detailed statistics
+        initial_tree: Initial tree solution
+        progress_callback: Progress callback function
+        greedy_tree: Greedy solution for comparison
 
     Returns:
-        tuple or networkx.Graph: Resulting spanning tree and optionally statistics
+        tuple: Depending on return_stats, either (tree, cost, iterations, accepted, score_history)
+               or (tree, stats, score_history)
     """
-
-    # CORRECTED: Improved parameter adaptation for large instances
-    num_nodes = len(G.nodes)
-    original_max_iterations = max_iterations
-    original_cooling_rate = cooling_rate
-    original_min_temperature = 0.01  # Default value from the original code
-
-    # CORRECTION 1: Fix insufficient iterations for large instances
-    # Scale iterations proportionally with graph size for better convergence
-    if num_nodes >= 50:
-        # Dynamic iteration scaling based on graph size
-        if num_nodes >= 200:
-            # Very large graphs: significant increase in iterations
-            iteration_multiplier = min(3.0, 1.0 + (num_nodes - 200) / 200)
-            max_iterations = int(max_iterations * iteration_multiplier)
-            max_iterations = min(max_iterations, 25000)  # Cap at 25k for very large instances
-        elif num_nodes >= 100:
-            # Large graphs: moderate increase in iterations
-            iteration_multiplier = 1.5 + (num_nodes - 100) / 200
-            max_iterations = int(max_iterations * iteration_multiplier)
-            max_iterations = min(max_iterations, 20000)  # Cap at 20k
-        else:  # 50-99 nodes
-            # Medium graphs: modest increase in iterations
-            iteration_multiplier = 1.2 + (num_nodes - 50) / 100
-            max_iterations = int(max_iterations * iteration_multiplier)
-            max_iterations = min(max_iterations, 15000)  # Cap at 15k
-
-        # Ensure minimum iteration thresholds for different graph size categories
-        if num_nodes >= 200:
-            max_iterations = max(max_iterations, 15000)  # Minimum 15k for very large
-        elif num_nodes >= 100:
-            max_iterations = max(max_iterations, 12000)  # Minimum 12k for large
-        else:  # 50-99 nodes
-            max_iterations = max(max_iterations, 8000)   # Minimum 8k for medium
-
-    # CORRECTION 2: Fix cooling rate issues for large problems
-    # Implement adaptive cooling rate based on graph size with staged cooling
-    if num_nodes >= 50:
-        # For large graphs, use slower initial cooling rate for better exploration
-        if num_nodes >= 200:
-            cooling_rate = 0.998  # Very slow cooling for very large graphs
-        elif num_nodes >= 100:
-            cooling_rate = 0.996  # Slow cooling for large graphs
-        else:  # 50-99 nodes
-            cooling_rate = 0.995  # Moderately slow cooling for medium graphs
-
-        # Adjust min_temperature based on graph size
-        if num_nodes >= 200:
-            adapted_min_temperature = 0.05  # Higher min temp for very large graphs
-        elif num_nodes >= 100:
-            adapted_min_temperature = 0.02  # Moderate min temp for large graphs
-        else:  # 50-99 nodes
-            adapted_min_temperature = 0.015  # Slightly higher min temp for medium graphs
-    else:
-        # Small graphs: use original parameters for maintained performance
-        adapted_min_temperature = original_min_temperature
-
-    # Log parameter adaptations for large instances
-    if num_nodes >= 50:
-        adaptation_msg = (f"Large instance optimization ({num_nodes} nodes): "
-                         f"max_iterations: {original_max_iterations} → {max_iterations}, "
-                         f"cooling_rate: {original_cooling_rate:.3f} → {cooling_rate:.3f}, "
-                         f"min_temperature: {original_min_temperature} → {adapted_min_temperature}")
-        logging.info(adaptation_msg)
-
-        if queue:
-            queue.put(("log", (adaptation_msg, "info")))
-
     global sa_cost_calls
-    sa_cost_calls[0] += 1
 
-    # ENHANCEMENT: Start SA from the best available solution
-    # Priority: 1) initial_tree (usually local search result), 2) greedy_tree, 3) generate new greedy
-    if initial_tree is not None:
-        # Check if we also have a greedy solution to compare
-        if greedy_tree is not None:
-            initial_cost = calculate_cost_sa(initial_tree, max_children, penalty)
-            greedy_cost = calculate_cost_sa(greedy_tree, max_children, penalty)
+    # Choose best starting solution
+    if initial_tree is not None and greedy_tree is not None:
+        initial_cost = calculate_cost_sa(initial_tree, max_children, penalty)
+        greedy_cost = calculate_cost_sa(greedy_tree, max_children, penalty)
 
-            if initial_cost <= greedy_cost:
-                T = initial_tree.copy()
-                if queue:
-                    queue.put(("log", (f"🎯 SA starting from Local Search solution (cost: {initial_cost:.2f}) - better than Greedy (cost: {greedy_cost:.2f})", "info")))
-            else:
-                T = greedy_tree.copy()
-                if queue:
-                    queue.put(("log", (f"🎯 SA starting from Greedy solution (cost: {greedy_cost:.2f}) - better than Local Search (cost: {initial_cost:.2f})", "info")))
-        else:
-            T = initial_tree.copy()
+        if initial_cost <= greedy_cost:
+            current_tree = initial_tree.copy()
             if queue:
-                queue.put(("log", (f"🎯 SA starting from provided initial solution (Local Search)", "info")))
+                queue.put(("log", (f"SA starting from Local Search solution (cost: {initial_cost:.2f})", "info")))
+        else:
+            current_tree = greedy_tree.copy()
+            if queue:
+                queue.put(("log", (f"SA starting from Greedy solution (cost: {greedy_cost:.2f})", "info")))
+    elif initial_tree is not None:
+        current_tree = initial_tree.copy()
+        if queue:
+            queue.put(("log", ("SA starting from provided initial solution", "info")))
     elif greedy_tree is not None:
-        T = greedy_tree.copy()
+        current_tree = greedy_tree.copy()
         if queue:
-            queue.put(("log", (f"🎯 SA starting from provided Greedy solution", "info")))
+            queue.put(("log", ("SA starting from provided greedy solution", "info")))
     else:
-        # Generate new greedy solution as fallback
-        T, _ = greedy_spanning_tree(G, max_children=max_children, penalty=penalty)
+        # Generate new greedy solution
+        current_tree, _ = greedy_spanning_tree(G, max_children, penalty)
         if queue:
-            queue.put(("log", (f"🎯 SA starting from newly generated Greedy solution", "info")))
+            queue.put(("log", ("SA starting from newly generated greedy solution", "info")))
 
-    # Calcola le chimate alla funzione di costo iniziale
-    cost = calculate_cost_sa(T, max_children, penalty)
-    sa_cost_calls[0] += 1
-    best_cost = cost
-    best_tree = T.copy()
+    # Initialize SA parameters
+    current_cost = calculate_cost_sa(current_tree, max_children, penalty)
+    best_tree = current_tree.copy()
+    best_cost = current_cost
 
-    # Parametri di ricottura simulata migliorati
     temperature = initial_temperature
-    min_temperature = adapted_min_temperature  # Use adapted value for large instances
+    min_temperature = 0.01
     iteration = 0
     accepted_count = 0
     rejected_count = 0
-    plateau_count = 0
 
-    # Parametri per il raffreddamento adattivo
-    alpha = cooling_rate  # Velocità di raffreddamento iniziale
-    adaptive_cooling = True
-
-    # Parametri di riscaldamento
-    reheating_factor = 1.5
-    max_reheats = 3
-    reheat_count = 0
-
-    # CORRECTED: Enhanced multi-stage cooling with adaptive rates for large instances
-    stage = 1
-    stage_lengths = {
-        1: max_iterations // 3,       # Exploration stage (high temperature)
-        2: max_iterations // 3,       # Transition stage (medium temperature)
-        3: max_iterations // 3        # Exploitation stage (low temperature)
-    }
-
-    # CORRECTION: Staged cooling rates adapted for large instances
-    if num_nodes >= 50:
-        # For large graphs, implement more gradual staged cooling
-        stage_cooling_rates = {
-            1: cooling_rate,                    # Use adapted cooling rate in exploration
-            2: cooling_rate * 0.999,            # Very slightly slower in transition
-            3: cooling_rate * 0.998             # Slightly slower in exploitation
-        }
-    else:
-        # Small graphs: use original staged cooling strategy
-        stage_cooling_rates = {
-            1: cooling_rate,              # Normal cooling in exploration
-            2: cooling_rate * 0.98,       # Slower cooling in transition
-            3: cooling_rate * 0.95        # Even slower cooling in exploitation
-        }
-
-    # Cronologia delle soluzioni per il rilevamento dei plateau
-    cost_history = []
-    best_cost_history = []
-
-    # Inizializza lo storico dei punteggi per il grafico temporale
+    cost_calls = sa_cost_calls[0]
     score_history = []
     start_time = time.time()
 
+    # Set degree limits
+    if isinstance(max_children, dict):
+        degree_limit = max_children
+    else:
+        degree_limit = {node: max_children for node in G.nodes()}
+
+    if queue:
+        queue.put(("log", (f"SA started: T={temperature:.2f}, iterations={max_iterations}, cooling={cooling_rate:.3f}", "info")))
+
     while temperature > min_temperature and iteration < max_iterations:
-        # Controlla se l'algoritmo deve essere interrotto
         if stop_event and stop_event.is_set():
             break
 
-        # Aggiorna la GUI periodicamente data la coda
-        if queue and iteration % 10 == 0:
-            queue.put(("temperature", round(temperature, 2)))
-            queue.put(("iteration", iteration))
-            queue.put(("cost", cost))
-            queue.put(("accepted", accepted_count))
-            queue.put(("plateau", plateau_count))
-            queue.put(("reheats", reheat_count))
+        # Update GUI periodically
+        if queue and iteration % max(1, max_iterations // 100) == 0:
+            progress_pct = min(100, (iteration / max_iterations) * 100)
+            queue.put(("progress", progress_pct))
+            queue.put(("temp", f"{temperature:.6f}"))
+            queue.put(("iter", f"{iteration}/{max_iterations}"))
+            queue.put(("cost", f"{current_cost}"))
 
-        # Raccoglie dati dettagliati ogni 10 iterazioni per il grafico temporale
-        if iteration % 10 == 0:
-            violations = count_constraint_violations(T, max_children)
+        # Collect data for score history
+        if iteration % max(1, max_iterations // 100) == 0:
+            violations = count_constraint_violations(current_tree, max_children)
             current_time = time.time() - start_time
 
-            # Salva dati completi per normalizzazione successiva
             score_data = {
-                "cost": cost,
+                "cost": current_cost,
                 "execution_time": current_time,
-                "memory": 0,  # Placeholder per la memoria
+                "memory": 0,
                 "violations": violations
             }
             score_history.append((iteration, score_data))
 
-        # Determinare la fase corrente in base al conteggio delle iterazioni
-        current_iter_stage = 1
-        iter_count = 0
-        for s, length in stage_lengths.items():
-            iter_count += length
-            if iteration < iter_count:
-                current_iter_stage = s
-                break
+        # Generate neighbor using edge swap
+        neighbor_tree = current_tree.copy()
+        neighbor_cost = _generate_neighbor_with_edge_swap(G, neighbor_tree, max_children, penalty, degree_limit)
 
-        # Regola i parametri in base alla fase corrente
-        if current_iter_stage != stage:
-            stage = current_iter_stage
-            alpha = stage_cooling_rates[stage]
+        if neighbor_cost is not None:
+            cost_calls += 1
 
-        # Genera una soluzione vicina di qualità superiore utilizzando una strategia avanzata
-        # Use adaptive parallel neighbor generation for large graphs and high temperatures
-        if num_nodes > 100 and temperature > initial_temperature * 0.5 and iteration % 10 == 0:
-            # Generate multiple neighbors in parallel and select the best one
-            try:
-                # Use adaptive resource management for neighbor generation
-                optimal_workers = calculate_optimal_workers(safety_margin=0.8, min_ram_per_worker=0.2)
-                num_neighbors = min(optimal_workers, 4, num_nodes // 50)  # Adaptive neighbor count
+            # Calculate cost difference
+            delta_cost = neighbor_cost - current_cost
 
-                # Monitor CPU and adjust if needed
-                current_cpu = monitor_cpu_usage()
-                if current_cpu > 85.0:
-                    num_neighbors = max(1, num_neighbors // 2)  # Reduce neighbors if CPU is high
-                    logging.debug(f"Reducing neighbor candidates to {num_neighbors} due to high CPU usage ({current_cpu:.1f}%)")
+            # Accept or reject the neighbor
+            if delta_cost <= 0:
+                # Always accept improvements
+                current_tree = neighbor_tree
+                current_cost = neighbor_cost
+                accepted_count += 1
 
-                neighbor_candidates = []
+                # Update best solution if this is better
+                if current_cost < best_cost:
+                    best_tree = current_tree.copy()
+                    best_cost = current_cost
 
-                for _ in range(num_neighbors):
-                    candidate = T.copy()
-                    strategy_prob = temperature / initial_temperature
+                    if progress_callback:
+                        progress_callback(iteration, temperature, current_cost, True, max_iterations)
+            else:
+                # Accept worse solution with probability exp(-Δ/T)
+                acceptance_prob = math.exp(-delta_cost / temperature)
+                if random.random() < acceptance_prob:
+                    current_tree = neighbor_tree
+                    current_cost = neighbor_cost
+                    accepted_count += 1
 
-                    if random.random() < strategy_prob:
-                        generate_neighbor_tree(G, candidate, max_children, penalty)
-                    else:
-                        _generate_targeted_neighbor(G, candidate, max_children, penalty)
-
-                    neighbor_candidates.append(candidate)
-
-                # Evaluate all candidates in parallel (GPU acceleration removed for stability)
-                costs = parallel_cost_evaluation(neighbor_candidates, max_children, penalty, calculate_cost_sa)
-
-                # Select the best neighbor
-                best_idx = min(range(len(costs)), key=lambda i: costs[i])
-                neighbor_tree = neighbor_candidates[best_idx]
-                neighbor_cost = costs[best_idx]
-
-                sa_cost_calls[0] += len(neighbor_candidates)  # Update counter for all evaluations
-
-            except Exception as e:
-                logging.warning(f"Parallel neighbor generation failed, falling back to sequential: {e}")
-                # Fallback to sequential neighbor generation
-                neighbor_tree = T.copy()
-                strategy_prob = temperature / initial_temperature
-
-                if random.random() < strategy_prob:
-                    generate_neighbor_tree(G, neighbor_tree, max_children, penalty)
+                    if progress_callback:
+                        progress_callback(iteration, temperature, current_cost, True, max_iterations)
                 else:
-                    _generate_targeted_neighbor(G, neighbor_tree, max_children, penalty)
+                    rejected_count += 1
 
-                neighbor_cost = calculate_cost_sa(neighbor_tree, max_children, penalty)
-                sa_cost_calls[0] += 1
-        else:
-            # Sequential neighbor generation (default)
-            neighbor_tree = T.copy()
-            strategy_prob = temperature / initial_temperature
-
-            if random.random() < strategy_prob:
-                generate_neighbor_tree(G, neighbor_tree, max_children, penalty)
-            else:
-                _generate_targeted_neighbor(G, neighbor_tree, max_children, penalty)
-
-            neighbor_cost = calculate_cost_sa(neighbor_tree, max_children, penalty)
-            sa_cost_calls[0] += 1  # Update counter
-
-        # Decide whether to accept the new solution with enhanced criteria
-        delta_cost = neighbor_cost - cost
-
-        # Accept with probability based on Metropolis criterion with quality awareness
-        # For equal or better solutions, always accept
-        # For worse solutions, acceptance probability depends on how much worse and temperature
-        acceptance_prob = math.exp(-delta_cost / temperature) if delta_cost > 0 else 1.0
-
-        # At very low temperatures, also consider degree constraint violations more heavily
-        if temperature < 1.0:
-            # Count constraint violations in both current and neighbor
-            current_violations = count_constraint_violations(T, max_children)
-            neighbor_violations = count_constraint_violations(neighbor_tree, max_children)
-
-            # Adjust acceptance probability based on violation changes
-            if neighbor_violations > current_violations:
-                acceptance_prob *= 0.5  # Penalize increases in violations at low temps
-            elif neighbor_violations < current_violations:
-                acceptance_prob = min(acceptance_prob * 2.0, 1.0)  # Favor decreases
-
-        if random.random() < acceptance_prob:
-            T = neighbor_tree
-            cost = neighbor_cost
-            accepted_count += 1
-
-            # Track best solution
-            if cost < best_cost:
-                best_cost = cost
-                best_tree = T.copy()
-                plateau_count = 0
-            else:
-                plateau_count += 1
+                    if progress_callback:
+                        progress_callback(iteration, temperature, current_cost, False, max_iterations)
         else:
             rejected_count += 1
-            plateau_count += 1
 
-        # Track cost history for plateau detection
-        cost_history.append(cost)
-        best_cost_history.append(best_cost)
-        if len(cost_history) > 100:  # Keep history limited
-            cost_history.pop(0)
-            best_cost_history.pop(0)
-
-        # Adaptive cooling rate based on acceptance rate
-        if adaptive_cooling and iteration % 100 == 0 and iteration > 0:
-            recent_acceptance_rate = accepted_count / (accepted_count + rejected_count)
-
-            # Reset counters for next period
-            accepted_count = 0
-            rejected_count = 0
-
-            # Adjust cooling rate based on acceptance rate
-            if recent_acceptance_rate > 0.6:  # Too many acceptances - cool faster
-                alpha = min(alpha * 1.05, 0.99)
-            elif recent_acceptance_rate < 0.2:  # Too few acceptances - cool slower
-                alpha = max(alpha * 0.95, 0.8)
-
-        # Consider reheating if stuck in a plateau
-        if plateau_count > 200 and reheat_count < max_reheats:
-            # Check if we're in a true plateau by analyzing cost history variance
-            if len(cost_history) > 50:
-                recent_costs = cost_history[-50:]
-                cost_variance = np.var(recent_costs) if hasattr(np, 'var') else sum((c - sum(recent_costs)/len(recent_costs))**2 for c in recent_costs)/len(recent_costs)
-
-                if cost_variance < 0.001 * best_cost:  # Very small variance indicates a plateau
-                    # Reheat the system
-                    temperature = min(temperature * reheating_factor, initial_temperature * 0.5)
-                    reheat_count += 1
-                    plateau_count = 0
-
-                    # Log reheating event
-                    if queue:
-                        queue.put(("log", (f"Reheating applied (#{reheat_count}): New temperature = {temperature:.2f}", "highlight")))
-
-        # Log plateau and reheat status periodically
-        if queue and iteration % 100 == 0:
-            queue.put(("log", (f"[SA] Plateau: {plateau_count} – Reheat: {reheat_count}", "info")))
-
-        # Cool down the temperature using current adaptive rate
-        temperature *= alpha
+        # Cool down temperature
+        temperature *= cooling_rate
         iteration += 1
 
-        # Update progress callback
-        if progress_callback:
-            progress_callback(iteration, temperature, cost, accepted_count, max_iterations)
+    # Final report
+    if queue:
+        final_violations = count_constraint_violations(best_tree, max_children)
+        acceptance_rate = accepted_count / (accepted_count + rejected_count) if (accepted_count + rejected_count) > 0 else 0
+        queue.put(("log", (f"SA completed: cost={best_cost:.2f}, iterations={iteration}, accepted={accepted_count}, violations={final_violations}", "success")))
+        queue.put(("log", (f"SA stats: acceptance_rate={acceptance_rate:.1%}, final_temp={temperature:.6f}", "info")))
 
-        # Every 500 iterations, perform a focused improvement on the current best solution
-        if iteration % 500 == 0:
-            improved_best = best_tree.copy()
-            improved_best = _improve_tree_locally(G, improved_best, max_children, penalty)
-            improved_cost = calculate_cost_sa(improved_best, max_children, penalty)
+    sa_cost_calls[0] = cost_calls
 
-            if improved_cost < best_cost:
-                best_tree = improved_best.copy()
-                best_cost = improved_cost
-                if queue:
-                    queue.put(("log", (f"Focused improvement found better solution: {best_cost}", "success")))
-
-    # Final intensification phase: try to improve the best solution one more time
-    final_best = best_tree.copy()
-    final_best = _improve_best_solution(G, final_best, max_children, penalty)
-    final_cost = calculate_cost_sa(final_best, max_children, penalty)
-    sa_cost_calls[0] += 1  # Update counter
-
-    if final_cost < best_cost:
-        best_tree = final_best
-        best_cost = final_cost
-        if queue:
-            queue.put(("log", (f"Final intensification improved solution to: {best_cost}", "success")))
-
+    # Return appropriate format based on return_stats flag
     if return_stats:
         stats = {
-            "iterations": iteration,
-            "accepted_moves": accepted_count + rejected_count,  # Total moves
-            "rejected_moves": rejected_count,
             "final_cost": best_cost,
+            "iterations": iteration,
+            "accepted_moves": accepted_count,
+            "rejected_moves": rejected_count,
             "final_temperature": temperature,
-            "reheats_applied": reheat_count
+            "acceptance_rate": accepted_count / (accepted_count + rejected_count) if (accepted_count + rejected_count) > 0 else 0
         }
-        sa_cost_calls[0] = iteration  # Use the total number of iterations to reflect the calls
         return best_tree, stats, score_history
     else:
-        sa_cost_calls[0] = iteration  # Use the total number of iterations to reflect the calls
         return best_tree, best_cost, iteration, accepted_count, score_history
+
+
 
 #==============================================================================
 #                           6. FUNZIONI DI SUPPORTO
@@ -4236,608 +4164,242 @@ def _generate_targeted_neighbor(G, tree, max_children, penalty):
 
     return tree
 
+# Placeholder for helper functions
 #==============================================================================
-#                           7. FUNZIONI DI MIGLIORAMENTO
+#                           HELPER FUNCTIONS FOR NEW ALGORITHMS
 #==============================================================================
-def try_random_edge_swap(G, current_tree, max_children, penalty, neighborhood_size=1):
+
+def _generate_neighbor_with_edge_swap(G, tree, max_children, penalty, degree_limit):
     """
-    Implementa una strategia best-improvement per il local search con parallelizzazione.
-    OPTIMIZATION: Limita l'esplorazione del vicinato per istanze grandi per migliorare le prestazioni.
+    Generate a neighbor solution by performing an edge swap.
+
+    Common Operator: Edge-swap (remove edge + add edge that maintains connectivity and degree constraints)
 
     Args:
         G: Original graph
-        current_tree: Current spanning tree (modificabile in-place)
-        max_children: Maximum allowed number of children
+        tree: Current tree to modify
+        max_children: Maximum degree constraint
         penalty: Penalty for violations
-        neighborhood_size: Numero di scambi candidati da provare
+        degree_limit: Dictionary of degree limits per node
 
     Returns:
-        bool: True if improvement was made
+        float or None: Cost of the neighbor tree, or None if no valid neighbor found
     """
-    tree_edges = list(current_tree.edges())
-    non_tree_edges = [e for e in G.edges() if e not in tree_edges and (e[1], e[0]) not in tree_edges]
-
-    if not non_tree_edges:
-        return False
-
-    # OPTIMIZATION: Limit neighborhood exploration for large instances
-    num_nodes = len(G.nodes())
-    if num_nodes > 100:
-        # For large instances, limit the number of edge candidates to explore
-        max_candidates = min(neighborhood_size * 10, len(tree_edges) // 4, 50)
-        if len(tree_edges) > max_candidates:
-            tree_edges = random.sample(tree_edges, max_candidates)
-
-        max_non_tree = min(len(non_tree_edges), max_candidates * 2)
-        if len(non_tree_edges) > max_non_tree:
-            non_tree_edges = random.sample(non_tree_edges, max_non_tree)
-
-    best_cost = calculate_cost_local(current_tree, max_children, penalty)
-
-    # Generate candidate edge swaps with limited exploration
-    edge_candidates = []
-    max_swaps = min(neighborhood_size, len(tree_edges), len(non_tree_edges))
-    for _ in range(max_swaps):
-        edge_to_remove = random.choice(tree_edges)
-        edge_to_add = random.choice(non_tree_edges)
-        edge_candidates.append((edge_to_remove, edge_to_add))
-
-    # Use adaptive parallel evaluation for multiple candidates
-    if neighborhood_size > 1 and len(G.nodes) > 30:  # Lower threshold for parallelization
-        # Parallel evaluation with adaptive resource management
-        try:
-            results = parallel_edge_swap_evaluation(G, current_tree, edge_candidates, max_children, penalty)
-
-            # Find the best valid result
-            best_result = None
-            best_swap_info = None
-
-            for i, result in enumerate(results):
-                if result is not None:
-                    cost, modified_tree = result
-                    if cost < best_cost:
-                        best_cost = cost
-                        best_result = modified_tree
-                        best_swap_info = (edge_candidates[i][0], edge_candidates[i][1], cost)
-
-            # Apply the best improvement if found
-            if best_result is not None:
-                current_tree.clear()
-                current_tree.add_edges_from(best_result.edges(data=True))
-
-                if best_swap_info:
-                    logging.debug(f"Adaptive parallel best improvement swap applied: removed {best_swap_info[0]}, "
-                                 f"added {best_swap_info[1]}, new cost: {best_swap_info[2]}")
-                return True
-
-        except Exception as e:
-            logging.warning(f"Adaptive parallel edge swap failed, falling back to sequential: {e}")
-
-    # Sequential evaluation (fallback or for small neighborhood_size)
-    best_tree = None
-    best_swap_info = None
-
-    for edge_to_remove, edge_to_add in edge_candidates:
-        # CRITICAL FIX: Verify edges exist before attempting swap
-        if not current_tree.has_edge(*edge_to_remove):
-            logging.debug(f"Edge {edge_to_remove} not found in current tree, skipping swap")
-            continue
-
-        if not G.has_edge(*edge_to_add):
-            logging.debug(f"Edge {edge_to_add} not found in original graph, skipping swap")
-            continue
-
-        # Crea copia temporanea dell'albero e applica lo scambio
-        temp_tree = current_tree.copy()
-
-        try:
-            temp_tree.remove_edge(*edge_to_remove)
-            # FIXED: Use safe weight access to prevent KeyError
-            edge_weight = safe_get_edge_weight(G, edge_to_add[0], edge_to_add[1], default_weight=1)
-            temp_tree.add_edge(*edge_to_add, weight=edge_weight)
-
-            # Verifica che la nuova struttura sia ancora un albero valido
-            if nx.is_connected(temp_tree) and nx.is_tree(temp_tree):
-                new_cost = calculate_cost_local(temp_tree, max_children, penalty)
-
-                # Se questo scambio è migliore del migliore trovato finora
-                if new_cost < best_cost:
-                    best_cost = new_cost
-                    best_tree = temp_tree.copy()
-                    best_swap_info = (edge_to_remove, edge_to_add, new_cost)
-        except (KeyError, nx.NetworkXError) as e:
-            logging.debug(f"Error during edge swap {edge_to_remove} -> {edge_to_add}: {e}")
-            continue
-
-    # Se abbiamo trovato almeno un miglioramento, applica il migliore
-    if best_tree is not None:
-        current_tree.clear()
-        current_tree.add_edges_from(best_tree.edges(data=True))
-
-        # Log opzionale per debug
-        if best_swap_info:
-            logging.debug(f"Sequential best improvement swap applied: removed {best_swap_info[0]}, "
-                         f"added {best_swap_info[1]}, new cost: {best_swap_info[2]}")
-
-        return True
-
-    return False  # nessun miglioramento trovato
-
-def fix_constraint_violations(G, current_tree, constrained_nodes, max_children, penalty, neighborhood_size=1):
-    """
-    Corregge i vincoli violati provando più alternative per ciascun nodo con parallelizzazione.
-    Utilizza una strategia multi-trial con neighborhood_size tentativi per nodo.
-
-    Args:
-        G: Original graph
-        current_tree: Current spanning tree (modificabile in-place)
-        constrained_nodes: List of nodes violating child constraints
-        max_children: Maximum allowed number of children
-        penalty: Penalty for violations
-        neighborhood_size: Numero di tentativi per ciascun nodo violante
-
-    Returns:
-        bool: True if improvement was made
-    """
-    modified = False
-    best_cost = calculate_cost_local(current_tree, max_children, penalty)
-
-    # Use adaptive parallel evaluation for multiple constrained nodes when beneficial
-    if len(constrained_nodes) > 1 and neighborhood_size > 1 and len(G.nodes) > 30:  # Lower threshold
-        try:
-            # Generate all repair candidates for all constrained nodes
-            all_candidates = []
-            node_candidate_mapping = {}
-
-            for node in constrained_nodes:
-                node_candidates = _generate_constraint_repair_candidates(
-                    G, current_tree, node, neighborhood_size
-                )
-                if node_candidates:
-                    start_idx = len(all_candidates)
-                    all_candidates.extend(node_candidates)
-                    end_idx = len(all_candidates)
-                    node_candidate_mapping[node] = (start_idx, end_idx)
-
-            if all_candidates:
-                # Adaptive parallel evaluation of all candidates
-                results = parallel_edge_swap_evaluation(G, current_tree, all_candidates, max_children, penalty)
-
-                # Find the best improvement across all nodes
-                best_result = None
-                best_node = None
-
-                for node, (start_idx, end_idx) in node_candidate_mapping.items():
-                    node_results = results[start_idx:end_idx]
-
-                    for result in node_results:
-                        if result is not None:
-                            cost, modified_tree = result
-                            if cost < best_cost:
-                                best_cost = cost
-                                best_result = modified_tree
-                                best_node = node
-
-                # Apply the best improvement if found
-                if best_result is not None:
-                    current_tree.clear()
-                    current_tree.add_edges_from(best_result.edges(data=True))
-                    modified = True
-                    logging.debug(f"Adaptive parallel constraint violation fixed for node {best_node}, new cost: {best_cost}")
-                    return modified
-
-        except Exception as e:
-            logging.warning(f"Adaptive parallel constraint fixing failed, falling back to sequential: {e}")
-
-    # Sequential processing (fallback or for small problems)
-    for node in constrained_nodes:
-        # Ottieni gli archi del nodo violante e gli archi non presenti nell'albero
-        tree_edges_node = [(neighbor, safe_get_edge_weight(current_tree, node, neighbor, default_weight=1))
-                          for neighbor in current_tree.neighbors(node)]
-
-        # Trova archi potenziali dal grafo originale che non sono nell'albero
-        non_tree_edges_node = []
-        for neighbor in G.neighbors(node):
-            if not current_tree.has_edge(node, neighbor):
-                weight = safe_get_edge_weight(G, node, neighbor, default_weight=1)
-                non_tree_edges_node.append((neighbor, weight))
-
-        if not tree_edges_node or not non_tree_edges_node:
-            continue  # Salta se non ci sono opzioni di scambio
-
-        best_tree_for_node = None
-        best_cost_for_node = best_cost
-
-        # Prova neighborhood_size tentativi per questo nodo
-        for attempt in range(neighborhood_size):
-            # Seleziona casualmente un arco da rimuovere (preferendo quelli ad alto peso)
-            tree_edges_node.sort(key=lambda x: -x[1])  # Ordina per peso decrescente
-
-            # Selezione probabilistica che favorisce archi ad alto peso
-            if len(tree_edges_node) > 1:
-                # Usa distribuzione esponenziale per favorire archi pesanti
-                idx = min(int(random.expovariate(2) * len(tree_edges_node)), len(tree_edges_node) - 1)
-                neighbor_to_remove, _ = tree_edges_node[idx]
-            else:
-                neighbor_to_remove, _ = tree_edges_node[0]
-
-            # Seleziona casualmente un arco da aggiungere (preferendo quelli a basso peso)
-            non_tree_edges_node.sort(key=lambda x: x[1])  # Ordina per peso crescente
-
-            if len(non_tree_edges_node) > 1:
-                # Usa distribuzione esponenziale per favorire archi leggeri
-                idx = min(int(random.expovariate(2) * len(non_tree_edges_node)), len(non_tree_edges_node) - 1)
-                neighbor_to_add, _ = non_tree_edges_node[idx]
-            else:
-                neighbor_to_add, _ = non_tree_edges_node[0]
-
-            # CRITICAL FIX: Verify edges exist before attempting swap
-            if not current_tree.has_edge(node, neighbor_to_remove):
-                logging.debug(f"Edge ({node}, {neighbor_to_remove}) not found in tree, skipping")
-                continue
-
-            if not G.has_edge(node, neighbor_to_add):
-                logging.debug(f"Edge ({node}, {neighbor_to_add}) not found in original graph, skipping")
-                continue
-
-            # Crea copia temporanea e applica lo scambio
-            temp_tree = current_tree.copy()
-
-            try:
-                temp_tree.remove_edge(node, neighbor_to_remove)
-                # FIXED: Use safe weight access to prevent KeyError
-                edge_weight = safe_get_edge_weight(G, node, neighbor_to_add, default_weight=1)
-                temp_tree.add_edge(node, neighbor_to_add, weight=edge_weight)
-
-                # Verifica che la nuova struttura sia ancora un albero valido e connesso
-                if nx.is_connected(temp_tree) and nx.is_tree(temp_tree):
-                    new_cost = calculate_cost_local(temp_tree, max_children, penalty)
-
-                    # Se questo tentativo è migliore del migliore per questo nodo
-                    if new_cost < best_cost_for_node:
-                        best_cost_for_node = new_cost
-                        best_tree_for_node = temp_tree.copy()
-            except (KeyError, nx.NetworkXError) as e:
-                logging.debug(f"Error during constraint violation fix for node {node}: {e}")
-                continue
-
-        # Se abbiamo trovato un miglioramento per questo nodo, applicalo
-        if best_tree_for_node is not None:
-            current_tree.clear()
-            current_tree.add_edges_from(best_tree_for_node.edges(data=True))
-            best_cost = best_cost_for_node
-            modified = True
-
-            # Log opzionale per debug
-            logging.debug(f"Sequential constraint violation fixed for node {node}, new cost: {best_cost}")
-
-    return modified
-
-def _generate_constraint_repair_candidates(G, current_tree, node, neighborhood_size):
-    """
-    Generate edge swap candidates for repairing constraint violations for a specific node.
-
-    Args:
-        G: Original graph
-        current_tree: Current spanning tree
-        node: Node with constraint violations
-        neighborhood_size: Number of repair attempts to generate
-
-    Returns:
-        List of (edge_to_remove, edge_to_add) tuples
-    """
-    candidates = []
-
-    # Get edges from the violating node
-    tree_edges_node = [(neighbor, safe_get_edge_weight(current_tree, node, neighbor, default_weight=1))
-                      for neighbor in current_tree.neighbors(node)]
-
-    # Find potential edges from the original graph that are not in the tree
-    non_tree_edges_node = []
-    for neighbor in G.neighbors(node):
-        if not current_tree.has_edge(node, neighbor):
-            weight = safe_get_edge_weight(G, node, neighbor, default_weight=1)
-            non_tree_edges_node.append((neighbor, weight))
-
-    if not tree_edges_node or not non_tree_edges_node:
-        return candidates
-
-    # Generate neighborhood_size candidates
-    for _ in range(neighborhood_size):
-        # Select edge to remove (preferring high weight edges)
-        tree_edges_node.sort(key=lambda x: -x[1])
-        if len(tree_edges_node) > 1:
-            idx = min(int(random.expovariate(2) * len(tree_edges_node)), len(tree_edges_node) - 1)
-            neighbor_to_remove, _ = tree_edges_node[idx]
-        else:
-            neighbor_to_remove, _ = tree_edges_node[0]
-
-        # Select edge to add (preferring low weight edges)
-        non_tree_edges_node.sort(key=lambda x: x[1])
-        if len(non_tree_edges_node) > 1:
-            idx = min(int(random.expovariate(2) * len(non_tree_edges_node)), len(non_tree_edges_node) - 1)
-            neighbor_to_add, _ = non_tree_edges_node[idx]
-        else:
-            neighbor_to_add, _ = non_tree_edges_node[0]
-
-        edge_to_remove = (node, neighbor_to_remove)
-        edge_to_add = (node, neighbor_to_add)
-        candidates.append((edge_to_remove, edge_to_add))
-
-    return candidates
-
-def _improve_tree_locally(G, tree, max_children, penalty):
-    """
-    Performs a quick local improvement on the tree.
-    """
-    improved = True
-    improvement_rounds = 0
-
-    while improved and improvement_rounds < 5:  # Limit to 5 rounds
-        improved = False
-        improvement_rounds += 1
-
-        # Try to reduce child constraint violations
-        constrained_nodes = get_violating_nodes(tree, max_children)
-        if constrained_nodes:
-            # Try to fix one violation
-            node = random.choice(constrained_nodes)
-            neighbors = list(tree.neighbors(node))
-
-            # Sort edges by weight (prefer to remove higher weight edges)
-            edges_to_remove = [(node, neighbor, safe_get_edge_weight(tree, node, neighbor, default_weight=1))
-                              for neighbor in neighbors]
-            edges_to_remove.sort(key=lambda x: -x[2])  # Sort by weight descending
-
-            for _, neighbor, _ in edges_to_remove:
-                # Try removing this edge
-                tree.remove_edge(node, neighbor)
-
-                # Check if tree is still connected
-                if not nx.is_connected(tree):
-                    # Find alternative connection
-                    best_alternative = None
-                    best_weight = float('inf')
-
-                    components = list(nx.connected_components(tree))
-                    comp1 = [c for c in components if node in c][0]
-                    comp2 = [c for c in components if neighbor in c][0]
-
-                    for n1 in comp1:
-                        for n2 in comp2:
-                            if G.has_edge(n1, n2) and (n1, n2) != (node, neighbor):
-                                weight = safe_get_edge_weight(G, n1, n2, default_weight=1)
-                                if weight < best_weight:
-                                    best_weight = weight
-                                    best_alternative = (n1, n2)
-
-                    if best_alternative:
-                        n1, n2 = best_alternative
-                        weight = safe_get_edge_weight(G, n1, n2, default_weight=1)
-                        tree.add_edge(n1, n2, weight=weight)
-                        improved = True
-                        break
-                    else:
-                        # No alternative found, put back the original edge
-                        weight = safe_get_edge_weight(G, node, neighbor, default_weight=1)
-                        tree.add_edge(node, neighbor, weight=weight)
-
-        # If no constraints violation fixes were made, try edge swaps for cost improvement
-        if not improved:
-            original_cost = calculate_cost_local(tree, max_children, penalty)
-
-            # Try some random edge swaps
-            for _ in range(5):  # Try a limited number of swaps
-                edge_to_remove = random.choice(list(tree.edges()))
-                u, v = edge_to_remove
-
-                # Remove the edge
-                tree.remove_edge(u, v)
-
-                # Check if tree is still connected (should not be)
-                components = list(nx.connected_components(tree))
-                if len(components) == 1:  # This should not happen in a proper tree
-                    continue
-
-                # Find an alternative edge to connect the components
-                comp1, comp2 = components[0], components[1]
-                best_edge = None
-                best_cost = float('inf')
-
-                candidate_edges = []
-                for n1 in comp1:
-                    for n2 in comp2:
-                        if G.has_edge(n1, n2) and (n1, n2) != (u, v):
-                            candidate_edges.append((n1, n2))
-
-                if candidate_edges:
-                    # Try each candidate edge and evaluate cost
-                    for edge in candidate_edges:
-                        n1, n2 = edge
-                        weight = safe_get_edge_weight(G, n1, n2, default_weight=1)
-                        tree.add_edge(n1, n2, weight=weight)
-
-                        cost = calculate_cost_local(tree, max_children, penalty)
-                        if cost < best_cost:
-                            best_cost = cost
-                            best_edge = edge
-
-                        # Remove the edge for next iteration
-                        tree.remove_edge(n1, n2)
-
-                    # Add the best edge found
-                    if best_edge:
-                        n1, n2 = best_edge
-                        weight = safe_get_edge_weight(G, n1, n2, default_weight=1)
-                        tree.add_edge(n1, n2, weight=weight)
-
-                        if best_cost < original_cost:
-                            improved = True
-                        else:
-                            # If no improvement found, revert to original tree structure
-                            tree.remove_edge(n1, n2)
-                            weight = safe_get_edge_weight(G, u, v, default_weight=1)
-                            tree.add_edge(u, v, weight=weight)
-                else:
-                    # No candidate edges found, restore original edge
-                    weight = safe_get_edge_weight(G, u, v, default_weight=1)
-                    tree.add_edge(u, v, weight=weight)
-
-    return tree
-
-def _improve_best_solution(G, tree, max_children, penalty):
-    """
-    Final intensification to improve the best solution found.
-    Uses a combination of strategies to try to find better solutions.
-    """
-    best_tree = tree.copy()
-    best_cost = calculate_cost_sa(tree, max_children, penalty)
-
-    # Try a more exhaustive edge swap approach
-    for u, v in list(best_tree.edges()):
-        # Remove the edge
-        best_tree.remove_edge(u, v)
-
-        # Find the components
-        components = list(nx.connected_components(best_tree))
-        if len(components) != 2:  # This should not happen in a tree
+    tree_edges = list(tree.edges())
+    if not tree_edges:
+        return None
+
+    # Select a random edge to remove
+    edge_to_remove = random.choice(tree_edges)
+    u, v = edge_to_remove
+
+    # Remove the edge
+    tree.remove_edge(u, v)
+
+    try:
+        # Find the two components created
+        components = list(nx.connected_components(tree))
+        if len(components) != 2:
+            # Restore edge and return None
             weight = safe_get_edge_weight(G, u, v, default_weight=1)
-            best_tree.add_edge(u, v, weight=weight)
-            continue
+            tree.add_edge(u, v, weight=weight)
+            return None
 
         comp1, comp2 = components
 
-        # Try all possible alternative edges
-        alternatives = []
+        # Find edges that can reconnect the components
+        candidate_edges = []
         for n1 in comp1:
             for n2 in comp2:
-                if G.has_edge(n1, n2) and (n1, n2) != (u, v):
+                if G.has_edge(n1, n2) and (n1, n2) != (u, v) and (n2, n1) != (u, v):
+                    # Check degree constraints
+                    current_degree_n1 = tree.degree(n1)
+                    current_degree_n2 = tree.degree(n2)
+
+                    if (current_degree_n1 < degree_limit.get(n1, max_children) and
+                        current_degree_n2 < degree_limit.get(n2, max_children)):
+                        candidate_edges.append((n1, n2))
+
+        if not candidate_edges:
+            # No valid reconnecting edges, restore original
+            weight = safe_get_edge_weight(G, u, v, default_weight=1)
+            tree.add_edge(u, v, weight=weight)
+            return None
+
+        # Select a random reconnecting edge
+        new_edge = random.choice(candidate_edges)
+        n1, n2 = new_edge
+
+        # Add the new edge
+        weight = safe_get_edge_weight(G, n1, n2, default_weight=1)
+        tree.add_edge(n1, n2, weight=weight)
+
+        # Calculate and return the cost
+        return calculate_cost_sa(tree, max_children, penalty)
+
+    except Exception as e:
+        # Restore original edge on error
+        if not tree.has_edge(u, v):
+            weight = safe_get_edge_weight(G, u, v, default_weight=1)
+            tree.add_edge(u, v, weight=weight)
+        logging.warning(f"Error in neighbor generation: {e}")
+        return None
+
+def get_violating_nodes(tree, max_children):
+    """
+    Get nodes that violate the degree constraints.
+
+    Args:
+        tree: Spanning tree
+        max_children: Maximum degree constraint (can be dict or int)
+
+    Returns:
+        list: Nodes that violate degree constraints
+    """
+    violating_nodes = []
+
+    if isinstance(max_children, dict):
+        degree_limit = max_children
+    else:
+        degree_limit = {node: max_children for node in tree.nodes()}
+
+    for node in tree.nodes():
+        current_degree = tree.degree(node)
+        limit = degree_limit.get(node, max_children)
+
+        if current_degree > limit:
+            violating_nodes.append(node)
+
+    return violating_nodes
+
+def try_random_edge_swap(G, current_tree, max_children, penalty, neighborhood_size=1):
+    """
+    Try random edge swaps to improve the current tree.
+
+    Args:
+        G: Original graph
+        current_tree: Current spanning tree (modified in-place)
+        max_children: Maximum degree constraint
+        penalty: Penalty for violations
+        neighborhood_size: Number of swaps to try
+
+    Returns:
+        bool: True if improvement was made
+    """
+    if isinstance(max_children, dict):
+        degree_limit = max_children
+    else:
+        degree_limit = {node: max_children for node in G.nodes()}
+
+    best_cost = calculate_cost_local(current_tree, max_children, penalty)
+    best_tree = None
+
+    for _ in range(neighborhood_size):
+        # Create a copy to test
+        test_tree = current_tree.copy()
+
+        # Try to generate a neighbor
+        new_cost = _generate_neighbor_with_edge_swap(G, test_tree, max_children, penalty, degree_limit)
+
+        if new_cost is not None and new_cost < best_cost:
+            best_cost = new_cost
+            best_tree = test_tree.copy()
+
+    # Apply the best improvement if found
+    if best_tree is not None:
+        current_tree.clear()
+        current_tree.add_edges_from(best_tree.edges(data=True))
+        return True
+
+    return False
+
+def fix_constraint_violations(G, current_tree, constrained_nodes, max_children, penalty, neighborhood_size=1):
+    """
+    Try to fix constraint violations by swapping edges.
+
+    Args:
+        G: Original graph
+        current_tree: Current spanning tree (modified in-place)
+        constrained_nodes: List of nodes violating constraints
+        max_children: Maximum degree constraint
+        penalty: Penalty for violations
+        neighborhood_size: Number of attempts per node
+
+    Returns:
+        bool: True if improvement was made
+    """
+    if not constrained_nodes:
+        return False
+
+    if isinstance(max_children, dict):
+        degree_limit = max_children
+    else:
+        degree_limit = {node: max_children for node in G.nodes()}
+
+    best_cost = calculate_cost_local(current_tree, max_children, penalty)
+    best_tree = None
+
+    for node in constrained_nodes:
+        for _ in range(neighborhood_size):
+            # Create a copy to test
+            test_tree = current_tree.copy()
+
+            # Try to reduce degree of this node by swapping one of its edges
+            neighbors = list(test_tree.neighbors(node))
+            if not neighbors:
+                continue
+
+            # Select an edge to remove from the violating node
+            neighbor_to_remove = random.choice(neighbors)
+            test_tree.remove_edge(node, neighbor_to_remove)
+
+            try:
+                # Find components
+                components = list(nx.connected_components(test_tree))
+                if len(components) != 2:
+                    continue
+
+                comp1, comp2 = components
+
+                # Find alternative edges that don't involve the violating node
+                alternative_edges = []
+                for n1 in comp1:
+                    if n1 == node:
+                        continue
+                    for n2 in comp2:
+                        if n2 == node:
+                            continue
+                        if G.has_edge(n1, n2):
+                            # Check degree constraints
+                            if (test_tree.degree(n1) < degree_limit.get(n1, max_children) and
+                                test_tree.degree(n2) < degree_limit.get(n2, max_children)):
+                                alternative_edges.append((n1, n2))
+
+                if alternative_edges:
+                    # Select a random alternative
+                    n1, n2 = random.choice(alternative_edges)
                     weight = safe_get_edge_weight(G, n1, n2, default_weight=1)
-                    alternatives.append((n1, n2, weight))
+                    test_tree.add_edge(n1, n2, weight=weight)
 
-        # Sort by weight ascending
-        alternatives.sort(key=lambda x: x[2])
+                    # Calculate new cost
+                    new_cost = calculate_cost_local(test_tree, max_children, penalty)
 
-        # Try the top 5 alternatives
-        for i, (n1, n2, _) in enumerate(alternatives[:5]):
-            weight = safe_get_edge_weight(G, n1, n2, default_weight=1)
-            best_tree.add_edge(n1, n2, weight=weight)
-            new_cost = calculate_cost_sa(best_tree, max_children, penalty)
+                    if new_cost < best_cost:
+                        best_cost = new_cost
+                        best_tree = test_tree.copy()
 
-            if new_cost < best_cost:
-                best_cost = new_cost
-                # Keep this improvement and continue
-                break
-            else:
-                # Undo this change
-                best_tree.remove_edge(n1, n2)
-                # If this was the last alternative, put back the original edge
-                if i == min(4, len(alternatives) - 1):
-                    weight = safe_get_edge_weight(G, u, v, default_weight=1)
-                    best_tree.add_edge(u, v, weight=weight)
+            except Exception as e:
+                logging.warning(f"Error in constraint violation fix: {e}")
+                continue
 
-    # Try to fix child constraint violations more aggressively
-    violating_nodes = get_violating_nodes(best_tree, max_children)
-    constrained_nodes = []
-    for node in violating_nodes:
-        children_count = len([child for child in best_tree.neighbors(node)
-                             if best_tree.degree(child) < best_tree.degree(node)])
-        constrained_nodes.append((node, children_count))
+    # Apply the best improvement if found
+    if best_tree is not None:
+        current_tree.clear()
+        current_tree.add_edges_from(best_tree.edges(data=True))
+        return True
 
-    if constrained_nodes:
-        # Sort by violation severity
-        constrained_nodes.sort(key=lambda x: x[1], reverse=True)
+    return False
 
-        # Try to fix the worst violations
-        for node, _ in constrained_nodes[:3]:  # Focus on worst 3 violations
-            neighbors = list(best_tree.neighbors(node))
-
-            # Try removing each edge and finding the best alternative
-            for neighbor in neighbors:
-                best_tree.remove_edge(node, neighbor)
-
-                if not nx.is_connected(best_tree):
-                    # Find components
-                    components = list(nx.connected_components(best_tree))
-                    comp1 = [c for c in components if node in c][0]
-                    comp2 = [c for c in components if neighbor in c][0]
-
-                    # Find alternative connections that don't involve the constrained node
-                    alt_edges = []
-                    for n1 in comp1:
-                        if n1 == node:
-                            continue  # Skip the constrained node
-                        for n2 in comp2:
-                            if G.has_edge(n1, n2):
-                                weight = safe_get_edge_weight(G, n1, n2, default_weight=1)
-                                alt_edges.append((n1, n2, weight))
-
-                    if alt_edges:
-                        # Sort by weight
-                        alt_edges.sort(key=lambda x: x[2])
-
-                        # Pick one of the best alternatives with some randomness
-                        idx = min(int(random.expovariate(1) * len(alt_edges)), len(alt_edges) - 1)
-                        n1, n2, _ = alt_edges[idx]
-                        weight = safe_get_edge_weight(G, n1, n2, default_weight=1)
-                        best_tree.add_edge(n1, n2, weight=weight)
-                        return best_tree  # Successfully modified
-                    else:
-                        # No alternative found, put back the original edge
-                        weight = safe_get_edge_weight(G, node, neighbor, default_weight=1)
-                        best_tree.add_edge(node, neighbor, weight=weight)
-
-    # If we get here, either there are no constraint violations or we couldn't fix them
-    # Try a standard edge swap but with more focus on high-cost edges
-
-    # Find high-cost edges in the tree
-    edges = [(u, v, safe_get_edge_weight(best_tree, u, v, default_weight=1)) for u, v in best_tree.edges()]
-    edges.sort(key=lambda x: -x[2])  # Sort by weight, highest first
-
-    # Try to replace one of the highest-cost edges
-    edge_idx = min(int(random.expovariate(0.5) * len(edges)), len(edges) - 1)
-    u, v, _ = edges[edge_idx]
-
-    # Remove this edge
-    best_tree.remove_edge(u, v)
-
-    # Standard reconnection logic similar to generate_neighbor_tree
-    components = list(nx.connected_components(best_tree))
-
-    if len(components) == 1:
-        # The edge didn't disconnect the tree (shouldn't happen in a proper tree)
-        weight = safe_get_edge_weight(G, u, v, default_weight=1)
-        best_tree.add_edge(u, v, weight=weight)
-        return generate_neighbor_tree(G, best_tree, max_children, penalty)
-
-    # Find a new edge to connect components
-    comp1, comp2 = components[0], components[1]
-
-    potential_edges = []
-    for n1 in comp1:
-        for n2 in comp2:
-            if G.has_edge(n1, n2) and (n1, n2) != (u, v):
-                weight = safe_get_edge_weight(G, n1, n2, default_weight=1)
-                potential_edges.append((n1, n2, weight))
-
-    if not potential_edges:
-        weight = safe_get_edge_weight(G, u, v, default_weight=1)
-        best_tree.add_edge(u, v, weight=weight)
-        return generate_neighbor_tree(G, best_tree, max_children, penalty)
-
-    # Sort by weight
-    potential_edges.sort(key=lambda x: x[2])
-
-    # Pick from the better edges with some randomness
-    # More likely to pick better edges, but still some exploration
-    idx = min(int(random.expovariate(2) * len(potential_edges)), len(potential_edges) - 1)
-    n1, n2, _ = potential_edges[idx]
-
-    # Add the new edge
-    weight = safe_get_edge_weight(G, n1, n2, default_weight=1)
-    best_tree.add_edge(n1, n2, weight=weight)
-
-    return best_tree
 
 #==============================================================================
 #                           8. BENCMARKING E TEST

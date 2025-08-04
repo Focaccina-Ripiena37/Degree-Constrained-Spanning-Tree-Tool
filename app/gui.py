@@ -18,6 +18,7 @@ from PIL import Image, ImageTk
 
 # Local algorithm imports
 from .algorithms import test_instance
+from .platform_styles import platform_styles
 from .utils import (
     generate_connected_random_graph,
     draw_and_save_graph,
@@ -58,10 +59,12 @@ class App:
         self.progress_bar = progress_bar
         self.root.title("DCST Tool")
 
+        # Configure platform-specific styling
+        platform_styles.configure_window(self.root)
+        self.colors = platform_styles.get_colors()
+
         # Implement adaptive window sizing based on screen resolution
         self.setup_adaptive_window_sizing()
-
-        self.root.configure(bg="#2b2b2b")  # Dark theme
 
         # Control variables
         self.n_small = tk.IntVar(value=10)
@@ -216,13 +219,16 @@ class App:
             optimal_width = screen_info['optimal_width']
             optimal_height = screen_info['optimal_height']
 
-            # Ensure minimum size for usability
-            min_width = 450  # Slightly larger than original 400
-            min_height = 700  # Minimum height for all controls
+            # Ensure minimum size for usability - increased default sizes
+            min_width = 600   # Increased from 450 for better usability
+            min_height = 800  # Increased from 700 for better layout
 
             final_width = max(min_width, optimal_width)
             final_height = max(min_height, optimal_height)
-            final_width = final_width // 2
+
+            # Use more of the available screen space
+            final_width = min(final_width, int(screen_info['screen_width'] * 0.6))  # Use up to 60% of screen width
+            final_height = min(final_height, int(screen_info['screen_height'] * 0.8))  # Use up to 80% of screen height
             
             # Center the window on screen
             screen_width = screen_info['screen_width']
@@ -251,20 +257,21 @@ class App:
 
         except Exception as e:
             print(f"⚠️ Adaptive sizing failed: {e}")
-            # Fallback to original size but centered
+            # Fallback to larger default size but centered
             try:
                 screen_width, screen_height = detect_screen_size()
-                fallback_width, fallback_height = 225, 920
-                x = (screen_width - fallback_width) // 4
-                y = (screen_height - fallback_height) // 4
+                fallback_width, fallback_height = 600, 800  # Increased from 225, 920
+                x = (screen_width - fallback_width) // 2
+                y = (screen_height - fallback_height) // 2
                 self.root.geometry(f"{fallback_width}x{fallback_height}+{x}+{y}")
                 self.root.resizable(True, True)
-                self.root.minsize(400, 600)
+                self.root.minsize(600, 800)  # Increased minimum size
                 print(f"📐 Fallback window: {fallback_width}x{fallback_height}")
             except:
-                # Ultimate fallback
-                self.root.geometry("450x920")
+                # Ultimate fallback - larger default
+                self.root.geometry("600x800")  # Increased from 450x920
                 self.root.resizable(True, True)
+                self.root.minsize(600, 800)
                 print("📐 Using default window size")
 
     def setup_mouse_wheel_scrolling(self, scrollable_frame):
@@ -317,16 +324,16 @@ class App:
         Create a scrollable container for the main interface.
         This allows the interface to be scrolled when content doesn't fit.
         """
-        # Create main container frame
-        self.main_container = tk.Frame(self.root, bg="#2b2b2b")
+        # Create main container frame using platform styling
+        self.main_container = platform_styles.create_frame(self.root)
         self.main_container.pack(fill="both", expand=True, padx=5, pady=5)
 
-        # Create canvas and scrollbar
-        self.canvas = tk.Canvas(self.main_container, bg="#2b2b2b", highlightthickness=0)
+        # Create canvas and scrollbar using platform colors
+        self.canvas = tk.Canvas(self.main_container, bg=self.colors['bg_primary'], highlightthickness=0)
         self.scrollbar = ttk.Scrollbar(self.main_container, orient="vertical", command=self.canvas.yview)
 
-        # Create scrollable frame
-        self.scrollable_frame = tk.Frame(self.canvas, bg="#2b2b2b")
+        # Create scrollable frame using platform styling
+        self.scrollable_frame = platform_styles.create_frame(self.canvas)
 
         # Configure scrolling
         self.scrollable_frame.bind(
@@ -381,77 +388,84 @@ class App:
         # Create main container with scrollable area
         self.create_scrollable_container()
 
-        # Create the main content frame inside the scrollable area
-        frame = tk.Frame(self.scrollable_frame, bg="#2b2b2b")
+        # Create the main content frame inside the scrollable area using platform styling
+        frame = platform_styles.create_frame(self.scrollable_frame)
         frame.pack(pady=10, fill="both", expand=True)
 
-        # Title (centered above inputs)
-        title_label = tk.Label(frame, text="DCST Tool", font=("Arial", 16, "bold"), fg="white", bg="#2b2b2b")
-        title_label.grid(row=0, column=0, columnspan=2, pady=(10, 20))  # Spanning two columns
+        # Title (centered above inputs) using platform styling
+        title_label = platform_styles.create_label(frame, "DCST Tool", style_type='title')
+        title_label.configure(font=platform_styles.get_font(18, 'bold'))
+        title_label.grid(row=0, column=0, columnspan=2, pady=(10, 20))
 
         # Add GitHub icon
         self.add_github_icon(frame)
 
-        # Input for number of nodes
-        tk.Label(frame, text="Small Instance:", fg="white", bg="#2b2b2b").grid(row=1, column=0, padx=5, pady=5)
-        tk.Entry(frame, textvariable=self.n_small, width=10).grid(row=1, column=1, padx=5, pady=5)
+        # Input for number of nodes using platform styling
+        platform_styles.create_label(frame, "Small Instance:").grid(row=1, column=0, padx=5, pady=5, sticky='w')
+        platform_styles.create_entry(frame, textvariable=self.n_small, width=10).grid(row=1, column=1, padx=5, pady=5)
 
-        tk.Label(frame, text="Medium Instance:", fg="white", bg="#2b2b2b").grid(row=2, column=0, padx=5, pady=5)
-        tk.Entry(frame, textvariable=self.n_medium, width=10).grid(row=2, column=1, padx=5, pady=5)
+        platform_styles.create_label(frame, "Medium Instance:").grid(row=2, column=0, padx=5, pady=5, sticky='w')
+        platform_styles.create_entry(frame, textvariable=self.n_medium, width=10).grid(row=2, column=1, padx=5, pady=5)
 
-        tk.Label(frame, text="Large Instance:", fg="white", bg="#2b2b2b").grid(row=3, column=0, padx=5, pady=5)
-        tk.Entry(frame, textvariable=self.n_large, width=10).grid(row=3, column=1, padx=5, pady=5)
+        platform_styles.create_label(frame, "Large Instance:").grid(row=3, column=0, padx=5, pady=5, sticky='w')
+        platform_styles.create_entry(frame, textvariable=self.n_large, width=10).grid(row=3, column=1, padx=5, pady=5)
 
-        # Input for max_children (k)
-        tk.Label(frame, text="Maximum Children:", fg="white", bg="#2b2b2b").grid(row=4, column=0, padx=5, pady=5)
-        tk.Entry(frame, textvariable=self.max_children, width=10).grid(row=4, column=1, padx=5, pady=5)
+        # Input for max_children (k) using platform styling
+        platform_styles.create_label(frame, "Maximum Children:").grid(row=4, column=0, padx=5, pady=5, sticky='w')
+        platform_styles.create_entry(frame, textvariable=self.max_children, width=10).grid(row=4, column=1, padx=5, pady=5)
 
-        tk.Label(frame, text="Penalty:", fg="white", bg="#2b2b2b").grid(row=5, column=0, padx=5, pady=5)
-        tk.Entry(frame, textvariable=self.penalty, width=10).grid(row=5, column=1, padx=5, pady=5)
+        platform_styles.create_label(frame, "Penalty:").grid(row=5, column=0, padx=5, pady=5, sticky='w')
+        platform_styles.create_entry(frame, textvariable=self.penalty, width=10).grid(row=5, column=1, padx=5, pady=5)
 
-        # New p parameter system
+        # New p parameter system using platform styling
         # Global multiplier slider
-        tk.Label(frame, text="Connection Multiplier:", fg="white", bg="#2b2b2b").grid(row=6, column=0, padx=5, pady=5)
-        self.p_multiplier_scale = tk.Scale(frame, variable=self.p_multiplier, from_=0, to=3, resolution=0.1,
-                                          orient="horizontal", bg="#2b2b2b", fg="white",
-                                          command=self.on_multiplier_change)
+        platform_styles.create_label(frame, "Connection Multiplier:").grid(row=6, column=0, padx=5, pady=5, sticky='w')
+        self.p_multiplier_scale = platform_styles.create_scale(frame, variable=self.p_multiplier, from_=0, to=3,
+                                                              resolution=0.1, orient="horizontal",
+                                                              command=self.on_multiplier_change)
         self.p_multiplier_scale.grid(row=6, column=1, padx=5, pady=5)
 
         # Multiplier value label
-        self.multiplier_label = tk.Label(frame, text="1.0x", fg="#87CEEB", bg="#2b2b2b", font=("Arial", 8))
+        self.multiplier_label = platform_styles.create_label(frame, "1.0x", style_type='accent')
+        self.multiplier_label.configure(font=platform_styles.get_font(10))
         self.multiplier_label.grid(row=6, column=2, padx=5, pady=5)
 
         # Advanced mode checkbox
-        self.advanced_checkbox = tk.Checkbutton(frame, text="Advanced Mode", variable=self.advanced_mode,
-                                               fg="white", bg="#2b2b2b", selectcolor="#2b2b2b",
-                                               command=self.toggle_advanced_mode)
+        self.advanced_checkbox = platform_styles.create_checkbutton(frame, "Advanced Mode",
+                                                                   variable=self.advanced_mode,
+                                                                   command=self.toggle_advanced_mode)
         self.advanced_checkbox.grid(row=7, column=0, columnspan=2, padx=5, pady=5, sticky="w")
 
         # Advanced p sliders (initially hidden)
         self.create_advanced_p_controls(frame)
 
-        # Button to start calculations
-        start_button = tk.Button(frame, text="Start", command=self.start_computation, bg="#3399ff", fg="white")
-        start_button.grid(row=12, column=0, pady=20)
+        # Button to start calculations using platform styling
+        start_button = platform_styles.create_button(frame, "Start", command=self.start_computation,
+                                                    style_type='primary')
+        start_button.grid(row=12, column=0, pady=20, padx=10)
 
-        # Button to stop calculations
-        stop_button = tk.Button(frame, text="Stop", command=self.stop_computation, bg="#ff3333", fg="white")
-        stop_button.grid(row=12, column=1, pady=20)
+        # Button to stop calculations using platform styling
+        stop_button = platform_styles.create_button(frame, "Stop", command=self.stop_computation,
+                                                   style_type='error')
+        stop_button.grid(row=12, column=1, pady=20, padx=10)
 
-        # Configuration management buttons
-        config_frame = tk.Frame(frame, bg="#2b2b2b")
+        # Configuration management buttons using platform styling
+        config_frame = platform_styles.create_frame(frame)
         config_frame.grid(row=13, column=0, columnspan=4, pady=10)
 
-        export_config_btn = tk.Button(config_frame, text="Export Config", command=self.export_configuration,
-                                     bg="#6f42c1", fg="white", width=15)
+        export_config_btn = platform_styles.create_button(config_frame, "Export Config",
+                                                         command=self.export_configuration,
+                                                         style_type='secondary', width=15)
         export_config_btn.grid(row=0, column=0, padx=10)
 
-        import_config_btn = tk.Button(config_frame, text="Import Config", command=self.import_configuration,
-                                     bg="#24ad08", fg="white", width=15)
+        import_config_btn = platform_styles.create_button(config_frame, "Import Config",
+                                                         command=self.import_configuration,
+                                                         style_type='success', width=15)
         import_config_btn.grid(row=0, column=1, padx=10)
 
-        # Label for status details
-        self.status_details = tk.Label(self.scrollable_frame, text="", fg="lightblue", bg="#2b2b2b", wraplength=300)
+        # Label for status details using platform styling
+        self.status_details = platform_styles.create_label(self.scrollable_frame, "", style_type='accent')
+        self.status_details.configure(wraplength=400)  # Increased wrap length for larger window
         self.status_details.pack(pady=5)
 
     def add_github_icon(self, frame):
@@ -1086,6 +1100,18 @@ class App:
             elif msg_type == "error":
                 messagebox.showerror("Error", msg_value)
                 self.reset_progress_bar()
+            elif msg_type == "reset_labels":
+                # Reset dynamic parameter labels with improved layout
+                self.iter_label.config(text="Iterations: -")
+                self.temp_label.config(text="Temperature: -")
+                self.cost_label.config(text="Current Cost: -")
+                self.accepted_label.config(text="Acceptances: -")
+                self.plateau_label.config(text="Plateau: -")
+                self.reheat_label.config(text="Reheat: -")
+                # Reset extra labels (if used)
+                self.extra_metric1_label.config(text="")
+                self.extra_metric2_label.config(text="")
+                self.extra_metric3_label.config(text="")
         except Exception as e:
             print(f"Error processing message {msg_type}: {e}")
 
@@ -1108,23 +1134,23 @@ class App:
 
         # Store results for later saving
         self.results = {}
-        instances = {
-            "small": self.n_small.get(),
-            "medium": self.n_medium.get(),
-            "large": self.n_large.get()
-        }
 
-        # Reset dynamic parameter labels with improved layout
-        self.iter_label.config(text="Iterations: -")
-        self.temp_label.config(text="Temperature: -")
-        self.cost_label.config(text="Current Cost: -")
-        self.accepted_label.config(text="Acceptances: -")
-        self.plateau_label.config(text="Plateau: -")
-        self.reheat_label.config(text="Reheat: -")
-        # Reset extra labels (if used)
-        self.extra_metric1_label.config(text="")
-        self.extra_metric2_label.config(text="")
-        self.extra_metric3_label.config(text="")
+        # Get instance sizes from main thread before starting background work
+        # This fixes the "main thread is not in main loop" error
+        try:
+            instances = {
+                "small": self.n_small.get(),
+                "medium": self.n_medium.get(),
+                "large": self.n_large.get()
+            }
+            max_children = self.max_children.get()
+            penalty = self.penalty.get()
+        except Exception as e:
+            self.queue.put(("error", f"Error reading GUI parameters: {e}"))
+            return
+
+        # Reset dynamic parameter labels using queue system (thread-safe)
+        self.queue.put(("reset_labels", None))
 
         try:
             # Total progress = 100 units per instance
@@ -1200,7 +1226,7 @@ class App:
                 # Execute simulation for current instance
                 try:
                     self.results[instance_name] = test_instance(
-                        G, self.max_children.get(), self.penalty.get(),
+                        G, max_children, penalty,
                         instance_name=instance_name,
                         stop_event=self.stop_event,
                         queue=self.queue,

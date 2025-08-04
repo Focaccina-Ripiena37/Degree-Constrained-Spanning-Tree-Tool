@@ -212,7 +212,7 @@ def get_screen_info():
 # Configure matplotlib to use a non-interactive backend during thread execution
 matplotlib.use('Agg')
 
-# Global cache for generated images to avoid regeneration
+# FIXED: Enhanced thread-safe cache for generated images
 _image_cache = {}
 _cache_lock = threading.Lock()
 
@@ -223,6 +223,21 @@ _max_image_workers = MAX_IMAGE_WORKERS
 # Global variable to store the current plot directory for the session
 _current_plot_dir = None
 _plot_dir_lock = threading.Lock()
+
+def _safe_cache_get(key):
+    """Thread-safe cache retrieval."""
+    with _cache_lock:
+        return _image_cache.get(key)
+
+def _safe_cache_set(key, value):
+    """Thread-safe cache storage."""
+    with _cache_lock:
+        _image_cache[key] = value
+
+def _safe_cache_check(key):
+    """Thread-safe cache existence check."""
+    with _cache_lock:
+        return key in _image_cache and os.path.exists(_image_cache[key])
 
 # Add project directory to path for imports
 project_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -623,19 +638,20 @@ def _draw_and_save_graph_sync(G, filename, max_children=None, is_spanning_tree=F
         print(f"⚠️ Error: Attempt to draw empty graph in {filename} ⚠️")
         return False
 
-    # Check cache first
+    # FIXED: Check cache first using thread-safe functions
     graph_hash = _get_graph_hash(G, max_children, is_spanning_tree)
-    with _cache_lock:
-        if graph_hash in _image_cache and os.path.exists(_image_cache[graph_hash]):
-            # Copy cached image to target location
-            try:
-                import shutil
-                shutil.copy2(_image_cache[graph_hash], filename)
+    if _safe_cache_check(graph_hash):
+        # Copy cached image to target location
+        try:
+            import shutil
+            cached_path = _safe_cache_get(graph_hash)
+            if cached_path and os.path.exists(cached_path):
+                shutil.copy2(cached_path, filename)
                 print(f"📋 Image retrieved from cache: {filename}")
                 return True
-            except Exception as e:
-                print(f"⚠️ Error copying from cache: {e}")
-                # Continue with normal generation
+        except Exception as e:
+            print(f"⚠️ Error copying from cache: {e}")
+            # Continue with normal generation
 
     # Use the dynamic plot directory for this session
     plot_dir = get_current_plot_directory()
@@ -678,9 +694,8 @@ def _draw_and_save_graph_sync(G, filename, max_children=None, is_spanning_tree=F
         plt.savefig(full_path, bbox_inches='tight', dpi=IMAGE_DPI)
         plt.close()
 
-        # Cache the generated image
-        with _cache_lock:
-            _image_cache[graph_hash] = full_path
+        # FIXED: Cache the generated image using thread-safe function
+        _safe_cache_set(graph_hash, full_path)
 
         print(f"🎨 Grafico salvato in: {full_path}")
         return True
@@ -719,16 +734,32 @@ def _save_table_as_image_sync(table_data, filename):
 
     # FIXED: Trova la riga con il punteggio migliore (più alto) usando la colonna corretta
     best_index = None
-    score_column = "Punteggio" if "Punteggio" in table_data.columns else "Score"
+    # Support multiple possible score column names
+    score_columns = ["Punteggio", "Score", "score"]
+    score_column = None
 
-    if score_column in table_data.columns:
+    for col in score_columns:
+        if col in table_data.columns:
+            score_column = col
+            break
+
+    if score_column and not table_data[score_column].empty:
+        # Find the row with the highest score (best solution)
         best_index = table_data[score_column].idxmax()
         best_score = table_data.loc[best_index, score_column]
 
         # FIXED: Use the correct algorithm column name
-        algo_col_for_best = "Algoritmo" if "Algoritmo" in table_data.columns else "Algorithm"
-        best_algo = table_data.loc[best_index, algo_col_for_best] if algo_col_for_best in table_data.columns else "Unknown"
+        algo_columns = ["Algoritmo", "Algorithm", "algorithm"]
+        algo_col_for_best = None
+        for col in algo_columns:
+            if col in table_data.columns:
+                algo_col_for_best = col
+                break
+
+        best_algo = table_data.loc[best_index, algo_col_for_best] if algo_col_for_best else "Unknown"
         print(f"🏆 Best solution: {best_algo} with score {best_score:.1f}")
+    else:
+        print("⚠️ No score column found - table will be generated without highlighting best solution")
 
     # Crea una figura e un asse con enhanced settings for color preservation
     fig, ax = plt.subplots(figsize=TABLE_FIGURE_SIZE)
@@ -768,12 +799,13 @@ def _save_table_as_image_sync(table_data, filename):
                               edgecolor='black', facecolor=header_color)
         cell.set_text_props(color=header_text_color, fontweight='bold', fontsize=10)
 
-    # FIXED: Support both "Algoritmo" and "Algorithm" column names
+    # FIXED: Support multiple algorithm column names
+    algo_columns = ["Algoritmo", "Algorithm", "algorithm"]
     algo_column = None
-    if "Algoritmo" in table_data.columns:
-        algo_column = "Algoritmo"
-    elif "Algorithm" in table_data.columns:
-        algo_column = "Algorithm"
+    for col in algo_columns:
+        if col in table_data.columns:
+            algo_column = col
+            break
 
     # Debug: Show algorithms in the data
     if algo_column:
@@ -828,7 +860,7 @@ def _save_table_as_image_sync(table_data, filename):
                 font_weight = 'bold'
 
             # FIXED: Evidenzia ulteriormente la migliore soluzione usando la colonna score corretta
-            score_columns = ["Punteggio", "Score"]
+            score_columns = ["Punteggio", "Score", "score"]
             if best_index is not None and index == best_index and col in score_columns:
                 font_weight = 'bold'
                 text_color = '#B8860B'  # Oro scuro per il punteggio della migliore soluzione

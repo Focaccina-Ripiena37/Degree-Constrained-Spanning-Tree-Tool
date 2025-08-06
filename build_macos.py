@@ -32,13 +32,14 @@ def check_macos_environment():
 def install_macos_dependencies():
     """Install macOS-specific build dependencies."""
     print("📦 Installing macOS build dependencies...")
-    
+
     dependencies = [
         "pyinstaller>=6.0.0",
         "setuptools",
         "wheel",
         "pyobjc-framework-Cocoa",  # macOS-specific
         "pyobjc-framework-Quartz",  # macOS-specific
+        "numpy>=1.21.0",  # Ensure compatible NumPy version
     ]
     
     for dep in dependencies:
@@ -234,8 +235,15 @@ app = BUNDLE(
 
 def build_macos_executable():
     """Build the macOS app bundle using PyInstaller."""
-    print("🔨 Building macOS app bundle...")
-    
+    print("🔨 Building macOS app bundle with NumPy fixes...")
+
+    # Set NumPy environment variables for build process
+    os.environ['NUMPY_EXPERIMENTAL_ARRAY_FUNCTION'] = '0'
+    os.environ['OPENBLAS_NUM_THREADS'] = '1'
+    os.environ['MKL_NUM_THREADS'] = '1'
+    os.environ['NUMEXPR_NUM_THREADS'] = '1'
+    os.environ['OMP_NUM_THREADS'] = '1'
+
     # Clean previous builds
     for dir_name in ['build', 'dist']:
         if os.path.exists(dir_name):

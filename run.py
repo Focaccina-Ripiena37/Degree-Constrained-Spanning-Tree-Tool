@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
 """
-DCST Tool - Simplified startup sequence
+DCST Tool - Simplified startup sequence with NumPy PyInstaller fixes
 Eliminates complex splash screen logic that was causing hanging issues.
+Includes fixes for NumPy CPU dispatcher conflicts in PyInstaller builds.
 """
 
-from app.gui import App
-import tkinter as tk
-from tkinter import ttk
 import os
 import sys
 import platform
@@ -16,6 +14,32 @@ import logging
 
 # Configure logging to suppress warnings
 logging.basicConfig(level=logging.ERROR, format='%(levelname)s: %(message)s')
+
+# NumPy PyInstaller compatibility fixes
+def fix_numpy_pyinstaller():
+    """Apply NumPy fixes for PyInstaller compatibility."""
+    # Set environment variables before any NumPy imports
+    os.environ['NUMPY_EXPERIMENTAL_ARRAY_FUNCTION'] = '0'
+    os.environ['OPENBLAS_NUM_THREADS'] = '1'
+    os.environ['MKL_NUM_THREADS'] = '1'
+    os.environ['NUMEXPR_NUM_THREADS'] = '1'
+    os.environ['OMP_NUM_THREADS'] = '1'
+    os.environ['NPY_NUM_BUILD_JOBS'] = '1'
+
+    # Disable NumPy warnings that can cause issues in PyInstaller
+    import warnings
+    warnings.filterwarnings('ignore', category=RuntimeWarning, module='numpy')
+    warnings.filterwarnings('ignore', message='.*CPU dispatcher.*')
+
+# Apply NumPy fixes before any other imports
+fix_numpy_pyinstaller()
+
+# Now safe to import tkinter and app modules
+import tkinter as tk
+from tkinter import ttk
+
+# Import app modules after NumPy fixes
+from app.gui import App
 
 def configure_cpu_optimization():
     """Configure CPU optimization for the application."""

@@ -215,6 +215,12 @@ elif sys.platform.startswith('darwin'):
             'CFBundleDocumentTypes': [],
             'LSApplicationCategoryType': 'public.app-category.developer-tools',
             'NSRequiresAquaSystemAppearance': False,  # Allow dark mode
+            'NSSupportsAutomaticGraphicsSwitching': True,  # Support GPU switching
+            'LSUIElement': False,  # Show in dock
+            'NSPrincipalClass': 'NSApplication',
+            'CFBundleExecutable': 'DCST_Tool_macOS',
+            'CFBundlePackageType': 'APPL',
+            'CFBundleSignature': 'DCST',
         }},
     )
 else:

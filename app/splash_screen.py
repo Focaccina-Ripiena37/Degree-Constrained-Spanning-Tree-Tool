@@ -14,6 +14,7 @@ import sys
 import logging
 from PIL import Image, ImageTk
 import platform
+import subprocess
 
 class SplashScreen:
     """
@@ -71,15 +72,26 @@ class SplashScreen:
         # Set icon if available
         self._set_splash_icon()
         
-        # Configure colors based on platform
+        # Configure colors based on platform and theme
         if platform.system() == "Darwin":  # macOS
-            bg_color = "#f0f0f0"
-            text_color = "#333333"
-            accent_color = "#007AFF"
+            # Detect macOS dark mode
+            is_dark_mode = self._detect_macos_dark_mode()
+
+            if is_dark_mode:
+                bg_color = "#1e1e1e"
+                text_color = "#ffffff"
+                accent_color = "#0a84ff"
+                secondary_color = "#b3b3b3"
+            else:
+                bg_color = "#ffffff"
+                text_color = "#000000"
+                accent_color = "#007aff"
+                secondary_color = "#666666"
         else:  # Windows and Linux
             bg_color = "#2b2b2b"
             text_color = "#ffffff"
             accent_color = "#0078d4"
+            secondary_color = "#cccccc"
         
         self.splash_root.configure(bg=bg_color)
         
@@ -102,7 +114,7 @@ class SplashScreen:
             main_frame,
             text="Degree-Constrained Spanning Tree Tool",
             font=("Arial", 12),
-            fg=text_color,
+            fg=secondary_color,
             bg=bg_color
         )
         subtitle_label.pack(pady=(0, 20))
@@ -122,7 +134,7 @@ class SplashScreen:
                 algorithms_frame,
                 text=algo,
                 font=("Arial", 10),
-                fg=text_color,
+                fg=secondary_color,
                 bg=bg_color,
                 anchor="w"
             )
@@ -148,17 +160,17 @@ class SplashScreen:
             main_frame,
             textvariable=self.status_var,
             font=("Arial", 10),
-            fg=text_color,
+            fg=secondary_color,
             bg=bg_color
         )
         status_label.pack(pady=(5, 20))
-        
+
         # Version info
         version_label = tk.Label(
             main_frame,
             text="Version 1.0.0 • Cross-Platform",
             font=("Arial", 8),
-            fg=text_color,
+            fg=secondary_color,
             bg=bg_color
         )
         version_label.pack(side="bottom", pady=(0, 10))
@@ -171,7 +183,38 @@ class SplashScreen:
             self._animate_progress()
 
         return self.splash_root
-    
+
+    def _detect_macos_dark_mode(self):
+        """Detect if macOS is in dark mode."""
+        if platform.system() != "Darwin":
+            return False
+
+        try:
+            # Use AppleScript to detect dark mode
+            result = subprocess.run([
+                'osascript', '-e',
+                'tell application "System Events" to tell appearance preferences to get dark mode'
+            ], capture_output=True, text=True, timeout=5)
+
+            if result.returncode == 0:
+                return result.stdout.strip().lower() == 'true'
+        except Exception:
+            pass
+
+        # Fallback: try to detect through system preferences
+        try:
+            result = subprocess.run([
+                'defaults', 'read', '-g', 'AppleInterfaceStyle'
+            ], capture_output=True, text=True, timeout=5)
+
+            if result.returncode == 0:
+                return result.stdout.strip().lower() == 'dark'
+        except Exception:
+            pass
+
+        # Default to light mode if detection fails
+        return False
+
     def _set_splash_icon(self):
         """Set the splash screen icon."""
         try:

@@ -7,6 +7,8 @@ Handles cross-platform appearance issues, especially for macOS.
 import platform
 import tkinter as tk
 from tkinter import ttk
+import subprocess
+import sys
 
 class PlatformStyles:
     """
@@ -22,52 +24,136 @@ class PlatformStyles:
         
         # Configure platform-specific styles
         self._configure_styles()
+
+    def _detect_macos_dark_mode(self):
+        """Detect if macOS is in dark mode."""
+        if not self.is_macos:
+            return False
+
+        try:
+            # Use AppleScript to detect dark mode
+            result = subprocess.run([
+                'osascript', '-e',
+                'tell application "System Events" to tell appearance preferences to get dark mode'
+            ], capture_output=True, text=True, timeout=5)
+
+            if result.returncode == 0:
+                return result.stdout.strip().lower() == 'true'
+        except Exception:
+            pass
+
+        # Fallback: try to detect through system preferences
+        try:
+            result = subprocess.run([
+                'defaults', 'read', '-g', 'AppleInterfaceStyle'
+            ], capture_output=True, text=True, timeout=5)
+
+            if result.returncode == 0:
+                return result.stdout.strip().lower() == 'dark'
+        except Exception:
+            pass
+
+        # Default to light mode if detection fails
+        return False
     
     def _configure_styles(self):
         """Configure platform-specific color schemes and styles."""
         if self.is_macos:
-            # macOS-specific styling for better native appearance
-            self.colors = {
-                'bg_primary': '#f0f0f0',        # Light gray background
-                'bg_secondary': '#e8e8e8',      # Slightly darker gray
-                'bg_accent': '#d0d0d0',         # Accent background
-                'text_primary': '#333333',      # Dark text
-                'text_secondary': '#666666',    # Medium gray text
-                'text_accent': '#007AFF',       # Apple blue
-                'button_bg': '#007AFF',         # Apple blue buttons
-                'button_fg': '#ffffff',         # White button text
-                'button_hover': '#0056CC',      # Darker blue on hover
-                'entry_bg': '#ffffff',          # White entry fields
-                'entry_fg': '#333333',          # Dark entry text
-                'success_color': '#34C759',     # Apple green
-                'warning_color': '#FF9500',     # Apple orange
-                'error_color': '#FF3B30',       # Apple red
-                'border_color': '#c0c0c0',      # Light border
-            }
-            
-            # macOS button styling
-            self.button_style = {
-                'relief': 'flat',
-                'borderwidth': 1,
-                'highlightthickness': 0,
-                'font': ('SF Pro Display', 12),
-                'cursor': 'pointinghand',
-                'padx': 20,
-                'pady': 8,
-            }
-            
-            # macOS entry styling
-            self.entry_style = {
-                'relief': 'solid',
-                'borderwidth': 1,
-                'highlightthickness': 1,
-                'font': ('SF Pro Display', 12),
-                'insertbackground': '#333333',
-            }
-            
+            # Detect macOS dark mode
+            self.is_dark_mode = self._detect_macos_dark_mode()
+
+            if self.is_dark_mode:
+                # macOS Dark Mode styling
+                self.colors = {
+                    'bg_primary': '#1e1e1e',        # Dark background
+                    'bg_secondary': '#2d2d2d',      # Slightly lighter dark
+                    'bg_accent': '#3a3a3a',         # Accent background
+                    'text_primary': '#ffffff',      # White text
+                    'text_secondary': '#b3b3b3',    # Light gray text
+                    'text_accent': '#0a84ff',       # Apple blue (dark mode)
+                    'button_bg': '#0a84ff',         # Apple blue buttons
+                    'button_fg': '#ffffff',         # White button text
+                    'button_hover': '#0056b3',      # Darker blue on hover
+                    'entry_bg': '#2d2d2d',          # Dark entry fields
+                    'entry_fg': '#ffffff',          # White entry text
+                    'success_color': '#30d158',     # Apple green (dark mode)
+                    'warning_color': '#ff9f0a',     # Apple orange (dark mode)
+                    'error_color': '#ff453a',       # Apple red (dark mode)
+                    'border_color': '#545454',      # Dark border
+                    'canvas_bg': '#1e1e1e',         # Dark canvas background
+                    'scrollbar_bg': '#2d2d2d',      # Dark scrollbar
+                }
+            else:
+                # macOS Light Mode styling
+                self.colors = {
+                    'bg_primary': '#ffffff',        # White background
+                    'bg_secondary': '#f5f5f5',      # Light gray
+                    'bg_accent': '#e5e5e5',         # Accent background
+                    'text_primary': '#000000',      # Black text
+                    'text_secondary': '#666666',    # Medium gray text
+                    'text_accent': '#007aff',       # Apple blue
+                    'button_bg': '#007aff',         # Apple blue buttons
+                    'button_fg': '#ffffff',         # White button text
+                    'button_hover': '#0056cc',      # Darker blue on hover
+                    'entry_bg': '#ffffff',          # White entry fields
+                    'entry_fg': '#000000',          # Black entry text
+                    'success_color': '#34c759',     # Apple green
+                    'warning_color': '#ff9500',     # Apple orange
+                    'error_color': '#ff3b30',       # Apple red
+                    'border_color': '#d1d1d6',      # Light border
+                    'canvas_bg': '#ffffff',         # White canvas background
+                    'scrollbar_bg': '#f5f5f5',      # Light scrollbar
+                }
+
+            # macOS button styling - improved for both light and dark modes
+            if self.is_dark_mode:
+                self.button_style = {
+                    'relief': 'flat',
+                    'borderwidth': 0,
+                    'highlightthickness': 0,
+                    'font': ('SF Pro Display', 13),
+                    'cursor': 'pointinghand',
+                    'padx': 16,
+                    'pady': 8,
+                    'bd': 0,
+                }
+            else:
+                self.button_style = {
+                    'relief': 'flat',
+                    'borderwidth': 1,
+                    'highlightthickness': 0,
+                    'font': ('SF Pro Display', 13),
+                    'cursor': 'pointinghand',
+                    'padx': 16,
+                    'pady': 8,
+                    'bd': 1,
+                }
+
+            # macOS entry styling - improved for both light and dark modes
+            if self.is_dark_mode:
+                self.entry_style = {
+                    'relief': 'solid',
+                    'borderwidth': 1,
+                    'highlightthickness': 1,
+                    'font': ('SF Pro Display', 13),
+                    'insertbackground': '#ffffff',
+                    'selectbackground': '#0a84ff',
+                    'selectforeground': '#ffffff',
+                }
+            else:
+                self.entry_style = {
+                    'relief': 'solid',
+                    'borderwidth': 1,
+                    'highlightthickness': 1,
+                    'font': ('SF Pro Display', 13),
+                    'insertbackground': '#000000',
+                    'selectbackground': '#007aff',
+                    'selectforeground': '#ffffff',
+                }
+
             # macOS label styling
             self.label_style = {
-                'font': ('SF Pro Display', 12),
+                'font': ('SF Pro Display', 13),
                 'anchor': 'w',
             }
             
@@ -89,7 +175,10 @@ class PlatformStyles:
                 'warning_color': '#ffc107',     # Yellow
                 'error_color': '#dc3545',       # Red
                 'border_color': '#555555',      # Dark border
+                'canvas_bg': '#2b2b2b',         # Dark canvas background
+                'scrollbar_bg': '#3b3b3b',      # Dark scrollbar
             }
+            self.is_dark_mode = True  # Windows/Linux always use dark theme
             
             # Windows/Linux button styling
             self.button_style = {
@@ -282,14 +371,24 @@ class PlatformStyles:
     def configure_window(self, window):
         """Configure the main window with platform-appropriate styling."""
         window.configure(bg=self.colors['bg_primary'])
-        
+
         if self.is_macos:
             # macOS-specific window configuration
             try:
-                # Try to set the window appearance to match system theme
+                # Set window appearance to match system theme
+                if self.is_dark_mode:
+                    # Force dark appearance
+                    window.tk.call('tk::unsupported::MacWindowStyle', 'appearance', window._w, 'darkAqua')
+                else:
+                    # Force light appearance
+                    window.tk.call('tk::unsupported::MacWindowStyle', 'appearance', window._w, 'aqua')
+
+                # Set window style for better integration
                 window.tk.call('tk::unsupported::MacWindowStyle', 'style', window._w, 'document')
-            except:
-                pass  # Ignore if not supported
+            except Exception as e:
+                # Fallback if macOS styling is not supported
+                print(f"macOS styling not available: {e}")
+                pass
     
     def get_colors(self):
         """Get the current color scheme."""

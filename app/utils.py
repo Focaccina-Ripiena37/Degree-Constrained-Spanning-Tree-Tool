@@ -481,12 +481,19 @@ def batch_generate_images(image_tasks, progress_callback=None):
     return results
 
 def clear_image_cache():
-    """Clear the image cache to free memory."""
+    """Clear the image cache to free memory with improved cleanup."""
     global _image_cache
     with _cache_lock:
         cache_size = len(_image_cache)
+        # Clear references to cached files
         _image_cache.clear()
+
+    # Force garbage collection to free memory immediately
+    import gc
+    gc.collect()
+
     print(f"🧹 Image cache cleared ({cache_size} items removed)")
+    logging.info(f"Image cache cleared: {cache_size} items removed, memory freed")
 
 def get_performance_stats():
     """Get current performance statistics."""
@@ -595,14 +602,35 @@ class ResourceManager:
             self.active_computations.remove(thread.ident)
 
     def cleanup(self):
-        """Clean memory and terminate threads only when user interrupts calculation or closes the program."""
+        """Clean memory and terminate threads with enhanced resource management."""
         logging.info("Resource cleanup in progress...")
-        for thread in self.threads:
-            if thread.is_alive():
-                thread.join(timeout=1)
+
+        # Gracefully terminate threads with timeout
+        active_threads = [t for t in self.threads if t.is_alive()]
+        if active_threads:
+            logging.info(f"Terminating {len(active_threads)} active threads...")
+            for thread in active_threads:
+                try:
+                    thread.join(timeout=2)  # Increased timeout for graceful shutdown
+                    if thread.is_alive():
+                        logging.warning(f"Thread {thread.name} did not terminate gracefully")
+                except Exception as e:
+                    logging.error(f"Error terminating thread {thread.name}: {e}")
+
+        # Clear collections
         self.threads.clear()
         self.active_computations.clear()
-        gc.collect()
+
+        # Clear image cache if available
+        try:
+            clear_image_cache()
+        except Exception as e:
+            logging.warning(f"Error clearing image cache during cleanup: {e}")
+
+        # Force garbage collection multiple times for thorough cleanup
+        for _ in range(3):
+            gc.collect()
+
         logging.info("Resources freed successfully.")
 
 
@@ -634,9 +662,17 @@ def _draw_and_save_graph_sync(G, filename, max_children=None, is_spanning_tree=F
     """
     Synchronous version of draw_and_save_graph with caching support.
     """
+    # Enhanced input validation
     if len(G.nodes()) == 0:
-        print(f"⚠️ Error: Attempt to draw empty graph in {filename} ⚠️")
+        error_msg = f"Cannot draw empty graph for {filename}"
+        print(f"⚠️ Error: {error_msg}")
+        logging.warning(error_msg)
         return False
+
+    if len(G.edges()) == 0:
+        warning_msg = f"Drawing graph with no edges for {filename}"
+        print(f"⚠️ Warning: {warning_msg}")
+        logging.warning(warning_msg)
 
     # FIXED: Check cache first using thread-safe functions
     graph_hash = _get_graph_hash(G, max_children, is_spanning_tree)
@@ -701,8 +737,13 @@ def _draw_and_save_graph_sync(G, filename, max_children=None, is_spanning_tree=F
         return True
 
     except Exception as e:
-        print(f"❌ Errore nel salvataggio del grafico: {e}")
-        plt.close()  # Ensure plot is closed even on error
+        error_msg = f"Error saving graph to {filename}: {e}"
+        print(f"❌ {error_msg}")
+        logging.error(error_msg)
+        try:
+            plt.close()  # Ensure plot is closed even on error
+        except Exception as close_error:
+            logging.error(f"Error closing plot: {close_error}")
         return False
 
 def save_table_as_image(table_data, filename, async_mode=False):

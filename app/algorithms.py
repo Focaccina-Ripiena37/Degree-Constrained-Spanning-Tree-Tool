@@ -29,7 +29,8 @@ import concurrent.futures
 import multiprocessing
 from functools import partial
 
-# Local imports for configuration
+# Local imports for configuration and performance tracking
+from .performance_tracker import get_performance_tracker
 from .config import (
     # Adaptive scaling constants
     MAX_WORKERS_CONSERVATIVE, MAX_WORKERS_FALLBACK, MIN_CORES_FOR_OS,
@@ -1813,26 +1814,17 @@ def detect_system_resources():
 
 def classify_system_type(cpu_cores, available_ram_gb):
     """
-    Classify the system type based on CPU cores and available RAM.
+    SIMPLIFIED: System classification stub for backward compatibility.
 
     Args:
-        cpu_cores (int): Number of CPU cores
-        available_ram_gb (float): Available RAM in GB
+        cpu_cores: Ignored (for compatibility)
+        available_ram_gb: Ignored (for compatibility)
 
     Returns:
-        tuple: (system_type, safety_margin, ram_efficiency)
+        tuple: Always returns simplified system type
     """
-    # Check for workstation-class system
-    if cpu_cores >= WORKSTATION_MIN_CORES and available_ram_gb >= WORKSTATION_MIN_RAM:
-        return "workstation", WORKSTATION_SAFETY_MARGIN, WORKSTATION_RAM_EFFICIENCY
-
-    # Check for desktop-class system
-    elif cpu_cores >= DESKTOP_MIN_CORES and available_ram_gb >= DESKTOP_MIN_RAM:
-        return "desktop", DESKTOP_SAFETY_MARGIN, DESKTOP_RAM_EFFICIENCY
-
-    # Default to laptop/modest system
-    else:
-        return "laptop", LAPTOP_SAFETY_MARGIN, LAPTOP_RAM_EFFICIENCY
+    # Always return simplified system type for educational purposes
+    return "simplified", 0.5, 0.8
 
 def check_user_overrides():
     """
@@ -1871,112 +1863,23 @@ def check_user_overrides():
 
 def calculate_optimal_workers(safety_margin=None, min_ram_per_worker=None, max_workers=None):
     """
-    ADAPTIVE SCALING: Calculate optimal number of worker processes based on system resources.
-    Automatically scales from conservative (laptops) to aggressive (workstations).
+    SIMPLIFIED: Calculate workers using simple fixed-worker approach.
+
+    This function is kept for backward compatibility but now uses the simplified system.
 
     Args:
-        safety_margin (float): Safety margin for resource usage (0.0-1.0)
-        min_ram_per_worker (float): Minimum RAM per worker in GB
-        max_workers (int): Maximum number of workers (optional override)
+        safety_margin: Ignored (for compatibility)
+        min_ram_per_worker: Ignored (for compatibility)
+        max_workers: Ignored (for compatibility)
 
     Returns:
-        int: Optimal number of worker processes (adaptively limited based on system type)
+        int: Simple worker count (2-4 based on CPU cores)
     """
-    global _current_worker_count, _resource_safety_margin
+    # Import simplified parallelization
+    from .simple_parallelization import get_simple_worker_count
 
-    try:
-        cpu_cores, total_ram_gb, available_ram_gb = detect_system_resources()
-
-        # Check user overrides first
-        user_overrides = check_user_overrides()
-
-        # Force conservative mode if requested
-        if user_overrides['force_conservative']:
-            logging.info("CONSERVATIVE MODE: Forced via environment variable")
-            safety_margin = LAPTOP_SAFETY_MARGIN
-            max_allowed_workers = MAX_WORKERS_CONSERVATIVE
-            system_type = "conservative_override"
-        else:
-            # ADAPTIVE SCALING: Classify system and get appropriate parameters
-            if not ENABLE_ADAPTIVE_SCALING or cpu_cores < ADAPTIVE_SCALING_MIN_CORES or available_ram_gb < ADAPTIVE_SCALING_MIN_RAM:
-                # Fall back to conservative mode for very modest systems
-                system_type = "conservative_fallback"
-                safety_margin = LAPTOP_SAFETY_MARGIN if safety_margin is None else safety_margin
-                max_allowed_workers = MAX_WORKERS_CONSERVATIVE
-            else:
-                # Use adaptive classification
-                system_type, adaptive_safety_margin, ram_efficiency = classify_system_type(cpu_cores, available_ram_gb)
-
-                # Use adaptive safety margin if not explicitly provided
-                if safety_margin is None:
-                    safety_margin = adaptive_safety_margin
-
-                # Calculate dynamic maximum workers based on system capabilities
-                # Always leave MIN_CORES_FOR_OS cores for the OS
-                max_allowed_workers = max(1, cpu_cores - MIN_CORES_FOR_OS)
-
-                # Additional RAM-based limit for workstations
-                if system_type == "workstation":
-                    ram_based_max = int((available_ram_gb * ram_efficiency) / (min_ram_per_worker or MIN_RAM_PER_WORKER))
-                    max_allowed_workers = min(max_allowed_workers, ram_based_max)
-
-        # Apply user overrides
-        if user_overrides['safety_margin'] is not None:
-            safety_margin = user_overrides['safety_margin']
-            logging.info(f"Using user-specified safety margin: {safety_margin}")
-
-        if user_overrides['max_workers'] is not None:
-            max_allowed_workers = min(max_allowed_workers, user_overrides['max_workers'])
-            logging.info(f"Using user-specified max workers: {user_overrides['max_workers']}")
-
-        # Use defaults if not provided
-        if min_ram_per_worker is None:
-            min_ram_per_worker = MIN_RAM_PER_WORKER
-
-        # Update global safety margin
-        _resource_safety_margin = safety_margin
-
-        # Calculate workers based on CPU with adaptive safety margin
-        cpu_based_workers = max(1, int(cpu_cores * safety_margin))
-
-        # Calculate workers based on RAM with adaptive safety margin
-        usable_ram = max(MIN_MEMORY_GB, available_ram_gb * 0.8)  # Use 80% of available RAM
-        ram_based_workers = max(1, int((usable_ram * safety_margin) / min_ram_per_worker))
-
-        # Take the minimum to avoid resource contention
-        optimal_workers = min(cpu_based_workers, ram_based_workers, max_allowed_workers)
-
-        # Apply user-specified maximum limit if provided
-        if max_workers is not None:
-            optimal_workers = min(optimal_workers, max_workers)
-
-        # Ensure at least 1 worker
-        optimal_workers = max(1, optimal_workers)
-
-        # Emergency fallback for very low-resource systems
-        if available_ram_gb < LIMITED_MEMORY_GB:
-            optimal_workers = MAX_WORKERS_FALLBACK
-            logging.warning(f"calculate_optimal_workers: Very low RAM detected ({available_ram_gb:.1f}GB). Emergency fallback to {MAX_WORKERS_FALLBACK} worker.")
-        elif available_ram_gb < 8.0 and optimal_workers > 2:
-            optimal_workers = 2
-            logging.warning(f"calculate_optimal_workers: Limited RAM detected ({available_ram_gb:.1f}GB). Limiting to 2 workers max.")
-
-        _current_worker_count = optimal_workers
-
-        logging.info(f"ADAPTIVE SCALING: {system_type.upper()} system detected")
-        logging.info(f"Optimal workers calculated: {optimal_workers} "
-                    f"(CPU-based: {cpu_based_workers}, RAM-based: {ram_based_workers}, "
-                    f"Max allowed: {max_allowed_workers}, Safety margin: {safety_margin:.1%})")
-        logging.info(f"System specs: {cpu_cores} cores, {available_ram_gb:.1f}GB available RAM")
-
-        return optimal_workers
-
-    except Exception as e:
-        import traceback
-        logging.warning(f"calculate_optimal_workers: Failed to calculate optimal workers: {e}")
-        logging.debug(f"calculate_optimal_workers: Full traceback: {traceback.format_exc()}")
-        _current_worker_count = MAX_WORKERS_FALLBACK
-        return MAX_WORKERS_FALLBACK
+    # Use simplified worker calculation with a default item count
+    return get_simple_worker_count(10)  # Use 10 as default for compatibility
 
 def monitor_cpu_usage():
     """
@@ -2007,87 +1910,37 @@ def monitor_cpu_usage():
 
 def get_adaptive_max_workers_for_operation(operation_type="general", base_workers=None):
     """
-    Get adaptive maximum workers for specific operations based on system type.
+    SIMPLIFIED: Worker limit stub for backward compatibility.
 
     Args:
-        operation_type (str): Type of operation ("cost_eval", "edge_swap", "general")
-        base_workers (int): Base number of workers (if None, uses current optimal)
+        operation_type: Ignored (for compatibility)
+        base_workers: Ignored (for compatibility)
 
     Returns:
-        int: Maximum workers allowed for this operation
+        int: Simple fixed worker count
     """
-    if base_workers is None:
-        base_workers = _current_worker_count or calculate_optimal_workers()
+    # Import simplified parallelization
+    from .simple_parallelization import get_simple_worker_count
 
-    # Get system classification
-    try:
-        cpu_cores, _, available_ram_gb = detect_system_resources()
-        system_type, _, _ = classify_system_type(cpu_cores, available_ram_gb)
-
-        # Conservative limits for specific operations
-        if operation_type == "cost_eval":
-            if system_type == "workstation":
-                return min(base_workers, max(4, cpu_cores // 2))  # Up to half cores or 4, whichever is higher
-            elif system_type == "desktop":
-                return min(base_workers, 3)  # Up to 3 workers for desktops
-            else:
-                return min(base_workers, 2)  # Conservative for laptops
-
-        elif operation_type == "edge_swap":
-            if system_type == "workstation":
-                return min(base_workers, max(3, cpu_cores // 3))  # Up to 1/3 cores or 3, whichever is higher
-            elif system_type == "desktop":
-                return min(base_workers, 2)  # Up to 2 workers for desktops
-            else:
-                return 1  # Single worker for laptops (edge swap is memory intensive)
-
-        else:  # general
-            return base_workers
-
-    except Exception as e:
-        logging.warning(f"get_adaptive_max_workers_for_operation: Failed to get adaptive limits: {e}")
-        # Fallback to conservative limits
-        if operation_type == "cost_eval":
-            return min(base_workers or 2, 2)
-        elif operation_type == "edge_swap":
-            return 1
-        else:
-            return base_workers or 1
+    # Use simplified worker calculation
+    return get_simple_worker_count(10)  # Use 10 as default for compatibility
 
 def adaptive_worker_adjustment(current_workers, cpu_threshold=90.0):
     """
-    Dynamically adjust worker count based on current CPU usage.
+    SIMPLIFIED: Worker adjustment stub for backward compatibility.
 
     Args:
-        current_workers (int): Current number of workers
-        cpu_threshold (float): CPU usage threshold for throttling
+        current_workers: Ignored (for compatibility)
+        cpu_threshold: Ignored (for compatibility)
 
     Returns:
-        int: Adjusted number of workers
+        int: Simple fixed worker count
     """
-    try:
-        cpu_usage = monitor_cpu_usage()
+    # Import simplified parallelization
+    from .simple_parallelization import get_simple_worker_count
 
-        if cpu_usage > cpu_threshold:
-            # Reduce workers if CPU usage is too high
-            adjusted_workers = max(1, current_workers - 1)
-            # OPTIMIZATION: Reduced logging level to minimize overhead
-            logging.debug(f"adaptive_worker_adjustment: High CPU usage detected ({cpu_usage:.1f}%). "
-                          f"Reducing workers from {current_workers} to {adjusted_workers}")
-            return adjusted_workers
-        elif cpu_usage < cpu_threshold * 0.6 and current_workers < _current_worker_count:
-            # Increase workers if CPU usage is low and we're below optimal
-            adjusted_workers = min(_current_worker_count, current_workers + 1)
-            # OPTIMIZATION: Reduced logging level to minimize overhead
-            logging.debug(f"adaptive_worker_adjustment: Low CPU usage detected ({cpu_usage:.1f}%). "
-                        f"Increasing workers from {current_workers} to {adjusted_workers}")
-            return adjusted_workers
-
-        return current_workers
-
-    except Exception as e:
-        logging.warning(f"adaptive_worker_adjustment: Failed to adjust workers: {e}")
-        return current_workers
+    # Use simplified worker calculation
+    return get_simple_worker_count(10)  # Use 10 as default for compatibility
 
 
 
@@ -3050,106 +2903,29 @@ class IncrementalCostCalculator:
 
 def parallel_cost_evaluation(candidate_solutions, max_children, penalty, cost_function, max_workers=None):
     """
-    Evaluate costs of multiple candidate solutions in parallel using adaptive resource management.
-    GPU acceleration has been completely removed for system stability.
+    SIMPLIFIED: Evaluate costs using simple fixed-worker parallelization.
+
+    Educational Implementation:
+    - Simple rule: sequential for <5 items, parallel for 5+ items
+    - Fixed workers: 2-4 based on CPU cores
+    - Basic timeout: 60 seconds
+    - Simple fallback to sequential on any error
 
     Args:
         candidate_solutions: List of spanning trees to evaluate
         max_children: Maximum allowed number of children
         penalty: Penalty for violations
-        cost_function: Cost calculation function to use (calculate_cost_local, calculate_cost_sa, etc.)
-        max_workers: Maximum number of worker processes (default: adaptive calculation)
+        cost_function: Cost calculation function to use
+        max_workers: Ignored (for compatibility) - uses simple worker calculation
 
     Returns:
         List of costs corresponding to each candidate solution
     """
-    if len(candidate_solutions) <= 1:
-        # Skip parallelization for single candidates
-        if candidate_solutions:
-            return [cost_function(candidate_solutions[0], max_children, penalty)]
-        return []
+    # Import simplified parallelization
+    from .simple_parallelization import simple_parallel_cost_evaluation
 
-    # GPU acceleration completely removed for system stability
-
-    # Use adaptive resource management for worker calculation
-    if max_workers is None:
-        max_workers = calculate_optimal_workers(safety_margin=0.5, min_ram_per_worker=MIN_RAM_PER_WORKER)
-
-    # ADAPTIVE SCALING: Use operation-specific limits based on system type
-    max_workers = get_adaptive_max_workers_for_operation("cost_eval", max_workers)
-
-    # Monitor CPU and adjust workers if needed (more aggressive threshold)
-    max_workers = adaptive_worker_adjustment(max_workers, cpu_threshold=80.0)
-
-    # Skip parallelization if only 1 worker is optimal
-    if max_workers == 1:
-        logging.info("Using sequential evaluation due to resource constraints")
-        return [cost_function(candidate, max_children, penalty) for candidate in candidate_solutions]
-
-    try:
-        # Check system stability before starting intensive parallel operations
-        is_stable, stability_message = check_system_stability()
-        if not is_stable:
-            logging.warning(f"System instability detected: {stability_message}. Reducing parallelization.")
-            max_workers = 1
-
-        # Calculate adaptive timeout based on problem size
-        adaptive_timeout = min(60, max(10, len(candidate_solutions) * 2))  # 2 seconds per candidate, max 60s
-
-        # OPTIMIZATION: Reduced logging frequency to minimize overhead
-        if len(candidate_solutions) > 20:  # Only log for larger operations
-            logging.debug(f"Starting parallel cost evaluation with {max_workers} workers for {len(candidate_solutions)} candidates (timeout: {adaptive_timeout}s)")
-
-        with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
-            # Submit all cost evaluation tasks (CPU-only)
-            futures = [
-                executor.submit(cost_function, candidate, max_children, penalty)
-                for candidate in candidate_solutions
-            ]
-
-            # Collect results as they complete with adaptive timeout and monitoring
-            results = []
-            completed_count = 0
-            start_time = time.time()
-
-            for future in concurrent.futures.as_completed(futures, timeout=adaptive_timeout):
-                try:
-                    result = future.result(timeout=5)  # Individual task timeout
-                    results.append(result)
-                    completed_count += 1
-
-                    # OPTIMIZATION: Reduced frequency of system monitoring to minimize overhead
-                    if completed_count % max(1, len(futures) // 2) == 0:  # Reduced from //4 to //2
-                        cpu_usage = monitor_cpu_usage()
-                        elapsed_time = time.time() - start_time
-
-                        # OPTIMIZATION: Only check for critical CPU usage to reduce overhead
-                        if cpu_usage > 98.0:  # Increased threshold from 95.0 to 98.0
-                            logging.debug(f"Critical CPU usage detected ({cpu_usage:.1f}%) during parallel evaluation")
-                            # Consider emergency cleanup only for critical CPU usage
-                            emergency_resource_cleanup()
-
-                        # Check if we're taking too long (less verbose logging)
-                        if elapsed_time > adaptive_timeout * 0.9:  # Increased threshold from 0.8 to 0.9
-                            logging.debug(f"Parallel evaluation taking longer than expected ({elapsed_time:.1f}s)")
-
-                except concurrent.futures.TimeoutError:
-                    logging.warning(f"Individual task timed out during parallel cost evaluation")
-                    results.append(float('inf'))
-                except Exception as e:
-                    logging.warning(f"Parallel cost evaluation failed for one candidate: {e}")
-                    # Fallback to sequential calculation for this candidate
-                    results.append(float('inf'))
-
-            return results
-
-    except concurrent.futures.TimeoutError:
-        logging.warning("Parallel cost evaluation timed out. Falling back to sequential evaluation.")
-        return [cost_function(candidate, max_children, penalty) for candidate in candidate_solutions]
-    except Exception as e:
-        logging.warning(f"ProcessPoolExecutor failed: {e}. Falling back to sequential evaluation.")
-        # Fallback to sequential evaluation (CPU-only)
-        return [cost_function(candidate, max_children, penalty) for candidate in candidate_solutions]
+    # Use the simplified implementation
+    return simple_parallel_cost_evaluation(candidate_solutions, max_children, penalty, cost_function)
 
 def parallel_edge_swap_evaluation(G, current_tree, edge_candidates, max_children, penalty, max_workers=None):
     """
@@ -4658,6 +4434,18 @@ def test_instance(G, max_children, penalty, instance_name="", stop_event=None, q
     dynamic_thresholds = get_dynamic_thresholds()
     dynamic_thresholds.record_performance(len(G.nodes()), "greedy", greedy_time, greedy_memory)
 
+    # Record performance in enhanced tracker
+    performance_tracker = get_performance_tracker()
+    performance_tracker.record_algorithm_run(
+        algorithm_name="Greedy",
+        graph_size=len(G.nodes()),
+        execution_time=greedy_time,
+        memory_usage=greedy_memory,
+        cost=greedy_cost,
+        violations=greedy_violations,
+        metadata={"cost_calls": greedy_cost_calls[0], "instance": instance_name}
+    )
+
     if queue:
         queue.put(("log", (f"Greedy completato: costo={greedy_cost}, tempo={greedy_time:.4f}s, chiamate={greedy_cost_calls[0]}, violazioni={greedy_violations}", "success")))
 
@@ -4756,6 +4544,18 @@ def test_instance(G, max_children, penalty, instance_name="", stop_event=None, q
     # Record performance for dynamic threshold adjustment
     dynamic_thresholds = get_dynamic_thresholds()
     dynamic_thresholds.record_performance(len(G.nodes()), "local_search", local_time, local_memory)
+
+    # Record performance in enhanced tracker
+    performance_tracker = get_performance_tracker()
+    performance_tracker.record_algorithm_run(
+        algorithm_name="Local Search",
+        graph_size=len(G.nodes()),
+        execution_time=local_time,
+        memory_usage=local_memory,
+        cost=local_cost,
+        violations=local_violations,
+        metadata={"cost_calls": local_search_cost_calls[0], "instance": instance_name}
+    )
 
     if queue:
         queue.put(("log", (f"Ricerca locale completata: costo={local_cost}, tempo={local_time:.4f}s, chiamate={local_search_cost_calls[0]}, violazioni={local_violations}", "success")))
@@ -4863,6 +4663,18 @@ def test_instance(G, max_children, penalty, instance_name="", stop_event=None, q
     # Record performance for dynamic threshold adjustment
     dynamic_thresholds = get_dynamic_thresholds()
     dynamic_thresholds.record_performance(len(G.nodes()), "simulated_annealing", sa_time, sa_memory)
+
+    # Record performance in enhanced tracker
+    performance_tracker = get_performance_tracker()
+    performance_tracker.record_algorithm_run(
+        algorithm_name="Simulated Annealing",
+        graph_size=len(G.nodes()),
+        execution_time=sa_time,
+        memory_usage=sa_memory,
+        cost=sa_cost,
+        violations=sa_violations,
+        metadata={"cost_calls": sa_cost_calls[0], "iterations": sa_iterations, "instance": instance_name}
+    )
 
     if queue:
         acceptance_rate = (sa_accepts / sa_iterations * 100) if sa_iterations > 0 else 0
@@ -4999,236 +4811,33 @@ def _create_perturbed_solution(G, initial_tree, max_degree, perturbation_level=0
 
 def parallel_local_search(G, initial_tree, max_degree, penalty, num_threads=None, stop_event=None, queue=None):
     """
-    Enhanced parallel version of the local search algorithm with adaptive scaling.
+    SIMPLIFIED: Parallel local search with simple fixed-worker approach.
 
-    Features:
-    - Intelligent resource detection and adaptive worker calculation
-    - System classification-based scaling (workstation/desktop/laptop)
-    - Dynamic load balancing and progress monitoring
-    - Graceful degradation for large graphs or unstable systems
-    - Memory-efficient parallel execution with proper cleanup
+    Educational Implementation:
+    - Simple rule: sequential for small graphs (<20 nodes), parallel for larger ones
+    - Fixed workers: 2-4 based on CPU cores
+    - Basic timeout: 60 seconds
+    - Simple fallback to sequential on any error
 
     Args:
         G: NetworkX graph
         initial_tree: Initial spanning tree solution
         max_degree: Maximum degree constraint
         penalty: Penalty for constraint violations
-        num_threads: Optional thread count override
+        num_threads: Ignored (for compatibility) - uses simple worker calculation
         stop_event: Threading event for early termination
         queue: Communication queue for progress updates
 
     Returns:
         tuple: (best_tree, total_cost_calls, best_score_history)
     """
-    start_time = time.time()
-    graph_size = len(G.nodes())
+    # Import simplified parallelization
+    from .simple_parallelization import simple_parallel_local_search
 
-    # Detect system resources and classify system type
-    try:
-        cpu_cores, total_ram_gb, available_ram_gb = detect_system_resources()
-        system_type, safety_margin, ram_efficiency = classify_system_type(cpu_cores, available_ram_gb)
+    # Use the simplified implementation
+    return simple_parallel_local_search(G, initial_tree, max_degree, penalty, stop_event, queue)
 
-        if queue:
-            queue.put(("log", (f"🔍 System detected: {system_type.upper()} ({cpu_cores} cores, {available_ram_gb:.1f}GB available)", "info")))
-    except Exception as e:
-        logging.warning(f"Failed to detect system resources: {e}")
-        system_type = "laptop"
-        safety_margin = 0.5
 
-    # Use dynamic thresholds instead of static ones
-    dynamic_thresholds = get_dynamic_thresholds()
-    large_graph_threshold = dynamic_thresholds.get_threshold("sequential_force")
-    parallel_threshold = dynamic_thresholds.get_threshold("parallel_min")
-
-    # Log dynamic threshold usage
-    if queue:
-        queue.put(("log", (f"🎯 Using dynamic thresholds: parallel_min={parallel_threshold}, sequential_force={large_graph_threshold}", "info")))
-
-    # Check if graph is too large for parallel processing
-    if graph_size > large_graph_threshold:
-        if queue:
-            queue.put(("log", (f"Large graph detected ({graph_size} nodes > {large_graph_threshold}). Using sequential execution for stability.", "warning")))
-        return adaptive_neighborhood_local_search(G, initial_tree, max_degree, penalty, stop_event=stop_event, queue=queue)
-
-    # Check if graph is too small for parallel processing
-    if graph_size < parallel_threshold:
-        if queue:
-            queue.put(("log", (f"Small graph detected ({graph_size} nodes < {parallel_threshold}). Sequential execution is more efficient.", "info")))
-        return adaptive_neighborhood_local_search(G, initial_tree, max_degree, penalty, stop_event=stop_event, queue=queue)
-
-    # Implement gradual degradation based on memory pressure
-    memory_mgmt = adaptive_memory_management("parallel_local_search")
-
-    # Calculate optimal workers using adaptive scaling with memory considerations
-    if num_threads is None:
-        # Use operation-specific limits for local search
-        base_workers = calculate_optimal_workers(safety_margin=safety_margin, min_ram_per_worker=0.6)
-        max_workers = get_adaptive_max_workers_for_operation("general", base_workers)
-    else:
-        # Respect user override but apply safety limits
-        base_workers = calculate_optimal_workers(safety_margin=safety_margin, min_ram_per_worker=0.6)
-        max_workers = min(num_threads, get_adaptive_max_workers_for_operation("general", base_workers))
-
-    # Apply gradual degradation based on memory pressure
-    if memory_mgmt['action'] == 'emergency_cleanup':
-        max_workers = 1  # Force sequential
-        if queue:
-            queue.put(("log", (f"Emergency memory situation: forcing sequential execution", "warning")))
-    elif memory_mgmt['action'] == 'reduce_load':
-        max_workers = max(1, max_workers // 2)  # Reduce by half
-        if queue:
-            queue.put(("log", (f"High memory pressure: reducing workers to {max_workers}", "warning")))
-    elif memory_mgmt['action'] == 'proactive_cleanup':
-        max_workers = max(1, int(max_workers * 0.75))  # Reduce by 25%
-        if queue:
-            queue.put(("log", (f"Moderate memory pressure: reducing workers to {max_workers}", "info")))
-
-    # Additional safety checks based on graph size
-    if graph_size > 200:
-        max_workers = min(max_workers, 3)  # Conservative for medium-large graphs
-    if graph_size > 100:
-        max_workers = min(max_workers, 4)  # Moderate for medium graphs
-
-    # Ensure minimum of 1 worker
-    max_workers = max(1, max_workers)
-
-    # Perform proactive cleanup if needed
-    if memory_mgmt['cleanup_needed']:
-        cleanup_stats = proactive_memory_cleanup(memory_mgmt['aggressive_cleanup'])
-        if queue and cleanup_stats.get('memory_freed_mb', 0) > 5:
-            queue.put(("log", (f"Proactive cleanup freed {cleanup_stats['memory_freed_mb']:.1f}MB", "info")))
-
-    # Check system stability before proceeding
-    is_stable, stability_message = check_system_stability()
-    if not is_stable:
-        if queue:
-            queue.put(("log", (f"System instability detected: {stability_message}. Using sequential local search.", "warning")))
-        return adaptive_neighborhood_local_search(G, initial_tree, max_degree, penalty, stop_event=stop_event, queue=queue)
-
-    # Monitor CPU and adjust workers if needed
-    max_workers = adaptive_worker_adjustment(max_workers, cpu_threshold=75.0)
-
-    # Final check: if only 1 worker, use sequential
-    if max_workers <= 1:
-        if queue:
-            queue.put(("log", ("Optimal worker count is 1. Using sequential execution.", "info")))
-        return adaptive_neighborhood_local_search(G, initial_tree, max_degree, penalty, stop_event=stop_event, queue=queue)
-
-    # Log parallel execution details
-    if queue:
-        queue.put(("log", (f"🚀 Starting parallel local search: {max_workers} workers, {graph_size} nodes ({system_type} mode)", "info")))
-
-    logging.info(f"Enhanced parallel local search: {max_workers} workers, {graph_size} nodes, {system_type} system")
-
-    results = []
-    total_calls = 0
-    best_score_history = []
-
-    try:
-        # Use ThreadPoolExecutor for better resource management and communication
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="LocalSearch") as executor:
-            # Create diverse initial solutions for each worker
-            initial_solutions = []
-            for i in range(max_workers):
-                if i == 0:
-                    # First worker uses the provided initial tree
-                    initial_solutions.append(initial_tree.copy())
-                else:
-                    # Other workers use slightly perturbed versions
-                    perturbed_tree = _create_perturbed_solution(G, initial_tree, max_degree, perturbation_level=0.1)
-                    initial_solutions.append(perturbed_tree)
-
-            # Submit tasks with different starting points
-            futures = []
-            for i, init_tree in enumerate(initial_solutions):
-                future = executor.submit(
-                    _enhanced_local_search_worker,
-                    G, init_tree, max_degree, penalty, i, stop_event, queue
-                )
-                futures.append(future)
-
-            # Collect results with timeout and progress monitoring
-            completed_workers = 0
-            timeout_per_worker = adaptive_timeout_calculation(graph_size, base_timeout=180)  # 3 minutes base
-
-            for future in concurrent.futures.as_completed(futures, timeout=timeout_per_worker * max_workers):
-                if stop_event and stop_event.is_set():
-                    # Cancel remaining futures
-                    for f in futures:
-                        f.cancel()
-                    break
-
-                try:
-                    worker_id, tree, calls, score_history, worker_time = future.result(timeout=timeout_per_worker)
-                    results.append((tree, calls, score_history))
-                    total_calls += calls
-                    completed_workers += 1
-
-                    # Update best score history
-                    if len(score_history) > len(best_score_history):
-                        best_score_history = score_history
-
-                    # Calculate current best cost for progress reporting
-                    current_cost = calculate_cost_local(tree, max_degree, penalty)
-
-                    # Monitor memory usage during execution
-                    if completed_workers % max(1, max_workers // 2) == 0:
-                        memory_check = adaptive_memory_management("parallel_local_search")
-                        if memory_check['action'] == 'emergency_cleanup':
-                            # Emergency situation - cancel remaining workers
-                            for f in futures:
-                                f.cancel()
-                            if queue:
-                                queue.put(("log", ("Emergency memory situation: cancelling remaining workers", "warning")))
-                            break
-                        elif memory_check['cleanup_needed']:
-                            # Perform cleanup during execution
-                            cleanup_stats = proactive_memory_cleanup(memory_check['aggressive_cleanup'])
-                            if queue and cleanup_stats.get('memory_freed_mb', 0) > 5:
-                                queue.put(("log", (f"Runtime cleanup freed {cleanup_stats['memory_freed_mb']:.1f}MB", "info")))
-
-                    if queue:
-                        queue.put(("log", (f"Worker {worker_id} completed: cost={current_cost}, calls={calls}, time={worker_time:.2f}s", "info")))
-
-                except concurrent.futures.TimeoutError:
-                    logging.warning(f"Local search worker timed out after {timeout_per_worker}s")
-                    if queue:
-                        queue.put(("log", (f"Worker timed out after {timeout_per_worker}s", "warning")))
-                except Exception as e:
-                    logging.warning(f"Local search worker failed: {e}")
-                    if queue:
-                        queue.put(("log", (f"Worker failed: {str(e)}", "warning")))
-
-        # Process results and find the best solution
-        if results:
-            # Find best result based on cost
-            best_result = min(results, key=lambda x: calculate_cost_local(x[0], max_degree, penalty))
-            best_tree, best_calls, best_history = best_result
-            best_cost = calculate_cost_local(best_tree, max_degree, penalty)
-
-            # Calculate performance metrics
-            total_time = time.time() - start_time
-            avg_calls_per_worker = total_calls / len(results) if results else 0
-
-            if queue:
-                queue.put(("log", (f"✅ Parallel local search completed: {completed_workers}/{max_workers} workers, best cost={best_cost}", "success")))
-                queue.put(("log", (f"📊 Performance: {total_calls} total calls, {avg_calls_per_worker:.0f} avg/worker, {total_time:.2f}s total", "info")))
-
-            return best_tree, total_calls, best_history
-        else:
-            # No results obtained, fallback to sequential
-            if queue:
-                queue.put(("log", ("No parallel results obtained, falling back to sequential", "warning")))
-            return adaptive_neighborhood_local_search(G, initial_tree, max_degree, penalty, stop_event=stop_event, queue=queue)
-
-    except Exception as e:
-        logging.error(f"Enhanced parallel local search failed: {e}")
-        if queue:
-            queue.put(("log", (f"Parallel execution failed: {str(e)}. Using sequential fallback.", "error")))
-
-        # Emergency cleanup and fallback
-        emergency_resource_cleanup()
-        return adaptive_neighborhood_local_search(G, initial_tree, max_degree, penalty, stop_event=stop_event, queue=queue)
 
 #==============================================================================
 #                           9. VALUTAZIONE E PUNTEGGIO

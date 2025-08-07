@@ -3094,60 +3094,7 @@ def validate_solution(graph, solution):
 
     return is_tree
 
-def evaluate_solution(solution: Dict[str, Any], constraints: Dict[str, Any]) -> float:
-    """
-    Evaluate the quality of a solution based on multiple criteria.
-
-    FIXED: Proper implementation that calculates meaningful scores based on:
-    - Cost (lower is better)
-    - Execution time (lower is better)
-    - Memory usage (lower is better)
-    - Constraint violations (lower is better)
-
-    Args:
-        solution: Dictionary with cost, execution_time, memory, violations
-        constraints: Dictionary with max values for normalization
-
-    Returns:
-        float: Score where higher values indicate better solutions
-    """
-    score = 0.0
-
-    # Get solution metrics
-    cost = solution.get("cost", float('inf'))
-    exec_time = solution.get("execution_time", float('inf'))
-    memory = solution.get("memory", float('inf'))
-    violations = solution.get("violations", float('inf'))
-
-    # Get reference values for normalization
-    max_cost = constraints.get("max_cost", 1.0)
-    max_time = constraints.get("max_time", 1.0)
-    max_memory = constraints.get("max_memory", 1.0)
-    max_violations = constraints.get("max_violations", 1.0)
-
-    # Avoid division by zero
-    max_cost = max(max_cost, 1.0)
-    max_time = max(max_time, 1.0)
-    max_memory = max(max_memory, 1.0)
-    max_violations = max(max_violations, 1.0)
-
-    # Calculate normalized scores (inverted so lower values get higher scores)
-    # Cost is the most important factor (50% weight)
-    cost_score = (1.0 - min(cost / max_cost, 1.0)) * 50.0
-
-    # Violations are critical (30% weight)
-    violation_score = (1.0 - min(violations / max_violations, 1.0)) * 30.0
-
-    # Time efficiency (15% weight)
-    time_score = (1.0 - min(exec_time / max_time, 1.0)) * 15.0
-
-    # Memory efficiency (5% weight)
-    memory_score = (1.0 - min(memory / max_memory, 1.0)) * 5.0
-
-    # Total score
-    score = cost_score + violation_score + time_score + memory_score
-
-    return score
+# Duplicate evaluate_solution function removed - using the one at line 4855
 
 def is_dcst(_, tree_edges, degree_constraints):
     """
@@ -3447,7 +3394,7 @@ def adaptive_neighborhood_local_search(G, initial_tree, max_children, penalty, m
             message = f"Iteration {iteration}/{max_iterations}"
             callback(message, best_cost, queue=queue, improved=False)
 
-        # Collect data for score history
+        # Collect data for score history with improved scoring
         if iteration % 5 == 0:
             violations = count_constraint_violations(current_tree, max_children)
             current_time = time.time() - start_time
@@ -3457,7 +3404,8 @@ def adaptive_neighborhood_local_search(G, initial_tree, max_children, penalty, m
                 "cost": current_cost,
                 "execution_time": current_time,
                 "memory": 0,
-                "violations": violations
+                "violations": violations,
+                "score": current_cost  # Use cost as score for now, will be normalized later
             }
             score_history.append((iteration, score_data))
 
@@ -3649,15 +3597,16 @@ def simulated_annealing_spanning_tree(G, max_children=3, penalty=1000, max_itera
         if stop_event and stop_event.is_set():
             break
 
-        # Update GUI periodically
-        if queue and iteration % max(1, max_iterations // 100) == 0:
+        # Update GUI more frequently for better real-time tracking
+        if queue and iteration % max(1, max_iterations // 200) == 0:  # Doubled update frequency
             progress_pct = min(100, (iteration / max_iterations) * 100)
             queue.put(("progress", progress_pct))
             queue.put(("temp", f"{temperature:.6f}"))
             queue.put(("iter", f"{iteration}/{max_iterations}"))
-            queue.put(("cost", f"{current_cost}"))
+            queue.put(("cost", current_cost))  # Send as number for better formatting
+            queue.put(("accepted", f"{accepted_count}/{iteration + 1}"))  # Add acceptance rate tracking
 
-        # Collect data for score history
+        # Collect data for score history with improved scoring
         if iteration % max(1, max_iterations // 100) == 0:
             violations = count_constraint_violations(current_tree, max_children)
             current_time = time.time() - start_time
@@ -3666,7 +3615,8 @@ def simulated_annealing_spanning_tree(G, max_children=3, penalty=1000, max_itera
                 "cost": current_cost,
                 "execution_time": current_time,
                 "memory": 0,
-                "violations": violations
+                "violations": violations,
+                "score": current_cost  # Use cost as score for now, will be normalized later
             }
             score_history.append((iteration, score_data))
 
@@ -4360,13 +4310,18 @@ def test_instance(G, max_children, penalty, instance_name="", stop_event=None, q
         memory_used = max(0, end_memory - start_memory)
         return result, memory_used, memory_used
 
+    # Reset call counters for this instance to ensure accurate per-instance counting
+    greedy_cost_calls[0] = 0
+    local_search_cost_calls[0] = 0
+    sa_cost_calls[0] = 0
+
     # 1. Run Greedy Algorithm
     if check_stop():
         return results
 
     update_progress("Greedy Spanning Tree", 0, "greedy")
     if queue:
-        queue.put(("log", (f"🔬 Esecuzione algoritmo greedy con misurazione memoria precisa per {instance_name}...", "info")))
+        queue.put(("log", (f"Esecuzione algoritmo greedy con misurazione memoria precisa per {instance_name}...", "info")))
 
     start_time = time.time()
 
@@ -4413,7 +4368,7 @@ def test_instance(G, max_children, penalty, instance_name="", stop_event=None, q
     greedy_memory = peak_memory  # Use peak memory as the primary metric
 
     if queue:
-        queue.put(("log", (f"📊 Greedy - Memoria peak: {peak_memory:.1f}KB, avg: {avg_memory:.1f}KB", "info")))
+        queue.put(("log", (f"Greedy - Memoria peak: {peak_memory:.1f}KB, avg: {avg_memory:.1f}KB", "info")))
 
     # Calcola violazioni dei vincoli
     greedy_violations = count_constraint_violations(greedy_tree, max_children)
@@ -4423,12 +4378,22 @@ def test_instance(G, max_children, penalty, instance_name="", stop_event=None, q
         if not test_violations_consistency(greedy_tree, max_children):
             logging.warning("Inconsistenza rilevata nel calcolo delle violazioni per Greedy")
 
+    # Create score history for Greedy (single point since it's not iterative)
+    greedy_score_history = [(0, {
+        "cost": greedy_cost,
+        "execution_time": greedy_time,
+        "memory": greedy_memory,
+        "violations": greedy_violations,
+        "score": greedy_cost  # Use cost as score for now, will be normalized later
+    })]
+
     results["greedy_tree"] = greedy_tree
     results["greedy_cost"] = greedy_cost
     results["greedy_time"] = greedy_time
     results["greedy_memory"] = greedy_memory
     results["greedy_violations"] = greedy_violations
     results["greedy_calls"] = greedy_cost_calls[0]  # Store actual call count
+    results["greedy_score_history"] = greedy_score_history
 
     # Record performance for dynamic threshold adjustment
     dynamic_thresholds = get_dynamic_thresholds()
@@ -4457,7 +4422,7 @@ def test_instance(G, max_children, penalty, instance_name="", stop_event=None, q
 
     update_progress("Local Search", 0, "local")
     if queue:
-        queue.put(("log", (f"🔬 Esecuzione ricerca locale con misurazione memoria precisa per {instance_name}...", "info")))
+        queue.put(("log", (f"Esecuzione ricerca locale con misurazione memoria precisa per {instance_name}...", "info")))
 
     start_time = time.time()
     graph_size = len(G.nodes())  # Define graph_size for local search
@@ -4528,7 +4493,7 @@ def test_instance(G, max_children, penalty, instance_name="", stop_event=None, q
     local_memory = peak_memory  # Use peak memory as the primary metric
 
     if queue:
-        queue.put(("log", (f"📊 Local Search - Memoria peak: {peak_memory:.1f}KB, avg: {avg_memory:.1f}KB", "info")))
+        queue.put(("log", (f"Local Search - Memoria peak: {peak_memory:.1f}KB, avg: {avg_memory:.1f}KB", "info")))
 
     # Calcola violazioni dei vincoli
     local_violations = count_constraint_violations(local_tree, max_children)
@@ -4568,22 +4533,26 @@ def test_instance(G, max_children, penalty, instance_name="", stop_event=None, q
 
     update_progress("Simulated Annealing", 0, "sa")
     if queue:
-        queue.put(("log", (f"🔬 Esecuzione simulated annealing con misurazione memoria precisa per {instance_name}...", "info")))
+        queue.put(("log", (f"Esecuzione simulated annealing con misurazione memoria precisa per {instance_name}...", "info")))
         queue.put(("log", (f"Utilizzo dell'albero ottimizzato da Local Search come soluzione iniziale", "info")))
 
     start_time = time.time()
 
-    # Create a callback for SA that updates progress
+    # Create a callback for SA that updates progress with enhanced real-time tracking
     def sa_progress_callback(iteration, temperature, current_cost, accepted, total_iterations):
-        if queue and iteration % max(1, total_iterations // 50) == 0:  # Update more frequently
+        if queue and iteration % max(1, total_iterations // 100) == 0:  # Even more frequent updates
             progress_pct = min(100, (iteration / total_iterations) * 100)
             update_progress("Simulated Annealing", progress_pct, "sa")
 
-            # Send detailed parameters to the UI
+            # Send detailed parameters to the UI with enhanced formatting
             queue.put(("temp", f"{temperature:.6f}"))
             queue.put(("iter", f"{iteration}/{total_iterations}"))
-            queue.put(("cost", f"{current_cost}"))
+            queue.put(("cost", current_cost))  # Send as number for better formatting
             queue.put(("accept", f"{accepted}"))
+
+            # Add additional real-time metrics
+            acceptance_rate = (accepted / max(1, iteration)) * 100 if iteration > 0 else 0
+            queue.put(("plateau", f"{acceptance_rate:.1f}%"))  # Use plateau label for acceptance rate
 
             # Log detailed progress at regular intervals
             if iteration % max(1, total_iterations // 10) == 0:  # Log every 10%
@@ -4646,7 +4615,7 @@ def test_instance(G, max_children, penalty, instance_name="", stop_event=None, q
     sa_memory = peak_memory  # Use peak memory as the primary metric
 
     if queue:
-        queue.put(("log", (f"📊 Simulated Annealing - Memoria peak: {peak_memory:.1f}KB, avg: {avg_memory:.1f}KB", "info")))
+        queue.put(("log", (f"Simulated Annealing - Memoria peak: {peak_memory:.1f}KB, avg: {avg_memory:.1f}KB", "info")))
 
     # Calcola violazioni dei vincoli
     sa_violations = count_constraint_violations(sa_tree, max_children)

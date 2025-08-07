@@ -956,25 +956,31 @@ def plot_score_evolution(score_histories: dict, reference_final_values: dict = N
         # Fallback se pandas non è disponibile
         pd = None
 
-    # Funzione per calcolare il punteggio normalizzato
+    # Use centralized evaluation function for consistency
     def evaluate_score_normalized(solution_data, reference_values):
-        """Calcola il punteggio normalizzato usando valori di riferimento fissi."""
+        """Calcola il punteggio normalizzato usando la funzione centralizzata."""
         if not reference_values:
             return solution_data.get('score', 0)  # Fallback al punteggio esistente
 
-        def penalize(value, max_val, weight):
-            if max_val == 0 or value == 0:
-                return 0
-            return weight * (value / max_val)
+        # Import the centralized evaluation function
+        try:
+            from .algorithms import evaluate_solution
+            return evaluate_solution(solution_data, reference_values)
+        except ImportError:
+            # Fallback to local implementation if import fails
+            def penalize(value, max_val, weight):
+                if max_val == 0 or value == 0:
+                    return 0
+                return weight * (value / max_val)
 
-        score = 100.0
-        cost_penalty = penalize(solution_data.get("cost", 0), reference_values.get("max_cost", 1), 40.0)
-        viol_penalty = penalize(solution_data.get("violations", 0), reference_values.get("max_violations", 1), 30.0)
-        time_penalty = penalize(solution_data.get("execution_time", 0), reference_values.get("max_time", 1), 20.0)
-        memory_penalty = penalize(solution_data.get("memory", 0), reference_values.get("max_memory", 1), 10.0)
+            score = 100.0
+            cost_penalty = penalize(solution_data.get("cost", 0), reference_values.get("max_cost", 1), 40.0)
+            viol_penalty = penalize(solution_data.get("violations", 0), reference_values.get("max_violations", 1), 30.0)
+            time_penalty = penalize(solution_data.get("execution_time", 0), reference_values.get("max_time", 1), 20.0)
+            memory_penalty = penalize(solution_data.get("memory", 0), reference_values.get("max_memory", 1), 10.0)
 
-        score -= (cost_penalty + viol_penalty + time_penalty + memory_penalty)
-        return max(score, 0.0)
+            score -= (cost_penalty + viol_penalty + time_penalty + memory_penalty)
+            return max(score, 0.0)
 
     # Crea figura con possibilità di secondo asse
     _, ax1 = plt.subplots(figsize=(14, 8))

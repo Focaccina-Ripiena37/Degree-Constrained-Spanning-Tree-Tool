@@ -13,28 +13,52 @@ import json
 import traceback
 from datetime import datetime
 
-# Third-party library imports
-import pandas as pd
-from PIL import Image, ImageTk
+# Lazy loading for heavy imports - will be loaded when needed
+_heavy_imports_loaded = False
+_pandas_loaded = False
+_pil_loaded = False
 
-# Local algorithm imports
-from .algorithms import test_instance
+def lazy_load_heavy_imports():
+    """Lazy load heavy third-party libraries."""
+    global _heavy_imports_loaded, pd, Image, ImageTk
+    if not _heavy_imports_loaded:
+        import pandas as pd
+        from PIL import Image, ImageTk
+        _heavy_imports_loaded = True
+    return pd, Image, ImageTk
+
+def lazy_load_algorithms():
+    """Lazy load algorithm modules."""
+    from .algorithms import test_instance, evaluate_solution
+    from .utils import (
+        generate_connected_random_graph,
+        draw_and_save_graph,
+        save_table_as_image,
+        batch_generate_images,
+        clear_image_cache,
+        _cleanup_image_thread_pool,
+        reset_plot_directory,
+        get_current_plot_directory,
+        detect_screen_size,
+        calculate_optimal_window_size,
+        get_screen_info
+    )
+    from .enhanced_visualization import get_enhanced_visualization
+    from .performance_tracker import get_performance_tracker
+
+    return (test_instance, evaluate_solution, generate_connected_random_graph,
+            draw_and_save_graph, save_table_as_image, batch_generate_images,
+            clear_image_cache, _cleanup_image_thread_pool, reset_plot_directory,
+            get_current_plot_directory, detect_screen_size, calculate_optimal_window_size,
+            get_screen_info, get_enhanced_visualization, get_performance_tracker)
+
+def lazy_load_utils():
+    """Lazy load utility functions for window sizing."""
+    from .utils import detect_screen_size, calculate_optimal_window_size, get_screen_info
+    return detect_screen_size, calculate_optimal_window_size, get_screen_info
+
+# Essential imports only - others will be lazy loaded
 from .platform_styles import platform_styles
-from .enhanced_visualization import get_enhanced_visualization
-from .performance_tracker import get_performance_tracker
-from .utils import (
-    generate_connected_random_graph,
-    draw_and_save_graph,
-    save_table_as_image,
-    batch_generate_images,
-    clear_image_cache,
-    _cleanup_image_thread_pool,
-    reset_plot_directory,
-    get_current_plot_directory,
-    detect_screen_size,
-    calculate_optimal_window_size,
-    get_screen_info
-)
 
 # Class for handling log messages
 class QueueHandler(logging.Handler):
@@ -66,9 +90,20 @@ class App:
         platform_styles.configure_window(self.root)
         self.colors = platform_styles.get_colors()
 
-        # Implement adaptive window sizing based on screen resolution
+        # Initialize variables first (fast)
+        self.init_variables()
+
+        # Setup window sizing (fast)
         self.setup_adaptive_window_sizing()
 
+        # Initialize UI components (fast)
+        self.init_ui_components()
+
+        # Schedule heavy initialization for after window is shown
+        self.root.after(50, self.lazy_init_heavy_components)
+
+    def init_variables(self):
+        """Initialize control variables quickly."""
         # Control variables
         self.n_small = tk.IntVar(value=10)
         self.n_medium = tk.IntVar(value=50)
@@ -87,6 +122,8 @@ class App:
         self.max_children = tk.IntVar(value=3)
         self.penalty = tk.IntVar(value=1000)
 
+    def init_ui_components(self):
+        """Initialize basic UI components quickly."""
         # Variables for progress tracking
         self.current_algorithm = ""
         self.current_instance = ""
@@ -100,6 +137,8 @@ class App:
         # Labels and input fields
         self.create_widgets()
 
+        # Note: Heavy initialization is already scheduled in __init__, no need to schedule again
+
         # Progress bar (placed in scrollable area)
         progress_container = platform_styles.create_frame(self.scrollable_frame)
         progress_container.pack(fill="x", pady=5)
@@ -111,21 +150,21 @@ class App:
         self.progress_label = platform_styles.create_label(progress_container, "Ready to start...")
         self.progress_label.pack(pady=2)
 
-        # Text area with scrollbar for execution details
+        # Text area with scrollbar for execution details - Increased size
         self.log_frame = platform_styles.create_frame(self.scrollable_frame)
-        self.log_frame.pack(fill="both", expand=True, padx=10, pady=5)
+        self.log_frame.pack(fill="both", expand=True, padx=12, pady=8)
 
         # Label for the log
         self.log_header = platform_styles.create_label(self.log_frame, "Performance Details", style_type='primary')
-        self.log_header.configure(anchor="w", font=platform_styles.get_font(10, 'bold'))
-        self.log_header.pack(fill="x", padx=5, pady=2)
+        self.log_header.configure(anchor="w", font=platform_styles.get_font(11, 'bold'))
+        self.log_header.pack(fill="x", padx=8, pady=4)
 
-        # Use platform-appropriate colors for log text
+        # Use platform-appropriate colors for log text - Increased height
         log_bg = self.colors.get('bg_secondary', '#1e1e1e')
         log_fg = self.colors.get('text_secondary', '#cccccc')
-        self.log_text = tk.scrolledtext.ScrolledText(self.log_frame, height=10, bg=log_bg, fg=log_fg,
+        self.log_text = tk.scrolledtext.ScrolledText(self.log_frame, height=12, bg=log_bg, fg=log_fg,
                                                 wrap=tk.WORD, font=("Consolas", 9))
-        self.log_text.pack(fill="both", expand=True)
+        self.log_text.pack(fill="both", expand=True, padx=4, pady=4)
         self.log_text.config(state=tk.DISABLED)  # Read-only
 
         # Configure text tags for different log levels and performance metrics
@@ -137,54 +176,54 @@ class App:
         self.log_text.tag_config("highlight", foreground="#3399ff")
         self.log_text.tag_config("performance", foreground="#ff9900")  # Orange for performance metrics
 
-        # Panel for dynamic parameters - Improved layout
+        # Panel for dynamic parameters - Improved layout with increased size
         self.dynamic_params_frame = tk.LabelFrame(self.scrollable_frame, text="Real-time Parameters",
                                                 bg=self.colors['bg_primary'], fg=self.colors['text_primary'],
-                                                font=platform_styles.get_font(9, 'bold'),
-                                                relief="groove", bd=2)
-        self.dynamic_params_frame.pack(fill="x", padx=10, pady=(5, 10))
+                                                font=platform_styles.get_font(10, 'bold'),
+                                                relief="groove", bd=3)
+        self.dynamic_params_frame.pack(fill="x", padx=12, pady=(8, 15), ipady=8)
 
         # Configure columns for uniform distribution
         for i in range(3):
             self.dynamic_params_frame.columnconfigure(i, weight=1, uniform="equal")
 
-        # First row: Main algorithm parameters
+        # First row: Main algorithm parameters - Increased font size and padding
         self.iter_label = tk.Label(self.dynamic_params_frame, text="Iterations: -",
                                  bg=self.colors['bg_primary'], fg=self.colors['text_accent'],
-                                 font=platform_styles.get_font(8, 'bold'),
-                                 anchor="w", width=15)
-        self.iter_label.grid(row=0, column=0, padx=8, pady=4, sticky="ew")
+                                 font=platform_styles.get_font(9, 'bold'),
+                                 anchor="w", width=16)
+        self.iter_label.grid(row=0, column=0, padx=10, pady=6, sticky="ew")
 
         self.temp_label = tk.Label(self.dynamic_params_frame, text="Temperature: -",
                                  bg=self.colors['bg_primary'], fg=self.colors['text_accent'],
-                                 font=platform_styles.get_font(8, 'bold'),
-                                 anchor="w", width=15)
-        self.temp_label.grid(row=0, column=1, padx=8, pady=4, sticky="ew")
+                                 font=platform_styles.get_font(9, 'bold'),
+                                 anchor="w", width=16)
+        self.temp_label.grid(row=0, column=1, padx=10, pady=6, sticky="ew")
 
         self.cost_label = tk.Label(self.dynamic_params_frame, text="Current Cost: -",
                                  bg=self.colors['bg_primary'], fg=self.colors['success_color'],
-                                 font=platform_styles.get_font(8, 'bold'),
-                                 anchor="w", width=15)
-        self.cost_label.grid(row=0, column=2, padx=8, pady=4, sticky="ew")
+                                 font=platform_styles.get_font(9, 'bold'),
+                                 anchor="w", width=16)
+        self.cost_label.grid(row=0, column=2, padx=10, pady=6, sticky="ew")
 
-        # Second row: Performance metrics
+        # Second row: Performance metrics - Increased font size and padding
         self.accepted_label = tk.Label(self.dynamic_params_frame, text="Acceptances: -",
                                      bg=self.colors['bg_primary'], fg=self.colors['success_color'],
-                                     font=platform_styles.get_font(8, 'bold'),
-                                     anchor="w", width=15)
-        self.accepted_label.grid(row=1, column=0, padx=8, pady=4, sticky="ew")
+                                     font=platform_styles.get_font(9, 'bold'),
+                                     anchor="w", width=16)
+        self.accepted_label.grid(row=1, column=0, padx=10, pady=6, sticky="ew")
 
         self.plateau_label = tk.Label(self.dynamic_params_frame, text="Plateau: -",
                                     bg=self.colors['bg_primary'], fg=self.colors['warning_color'],
-                                    font=platform_styles.get_font(8, 'bold'),
-                                    anchor="w", width=15)
-        self.plateau_label.grid(row=1, column=1, padx=8, pady=4, sticky="ew")
+                                    font=platform_styles.get_font(9, 'bold'),
+                                    anchor="w", width=16)
+        self.plateau_label.grid(row=1, column=1, padx=10, pady=6, sticky="ew")
 
         self.reheat_label = tk.Label(self.dynamic_params_frame, text="Reheat: -",
                                    bg=self.colors['bg_primary'], fg=self.colors['warning_color'],
-                                   font=platform_styles.get_font(8, 'bold'),
-                                   anchor="w", width=15)
-        self.reheat_label.grid(row=1, column=2, padx=8, pady=4, sticky="ew")
+                                   font=platform_styles.get_font(9, 'bold'),
+                                   anchor="w", width=16)
+        self.reheat_label.grid(row=1, column=2, padx=10, pady=6, sticky="ew")
 
         # Third row: Space for future additional metrics (optional)
         # This row can be used to add new metrics without modifying the layout
@@ -224,6 +263,9 @@ class App:
         Compatible with Windows, macOS, and Linux.
         """
         try:
+            # Lazy load utility functions
+            detect_screen_size, calculate_optimal_window_size, get_screen_info = lazy_load_utils()
+
             # Get screen information
             screen_info = get_screen_info()
 
@@ -235,16 +277,16 @@ class App:
             optimal_width = screen_info['optimal_width']
             optimal_height = screen_info['optimal_height']
 
-            # Ensure minimum size for usability - increased default sizes
-            min_width = 600   # Increased from 450 for better usability
-            min_height = 800  # Increased from 700 for better layout
+            # Ensure minimum size for multi-column layout
+            min_width = 1000   # Increased for multi-column layout
+            min_height = 800   # Adequate height for expanded sections
 
             final_width = max(min_width, optimal_width)
             final_height = max(min_height, optimal_height)
 
-            # Use more of the available screen space
-            final_width = min(final_width, int(screen_info['screen_width'] * 0.6))  # Use up to 60% of screen width
-            final_height = min(final_height, int(screen_info['screen_height'] * 0.8))  # Use up to 80% of screen height
+            # Use more screen space for multi-column layout
+            final_width = min(final_width, int(screen_info['screen_width'] * 0.75))  # Use up to 75% of screen width
+            final_height = min(final_height, int(screen_info['screen_height'] * 0.85))  # Use up to 85% of screen height
             
             # Center the window on screen
             screen_width = screen_info['screen_width']
@@ -273,21 +315,28 @@ class App:
 
         except Exception as e:
             print(f"⚠️ Adaptive sizing failed: {e}")
-            # Fallback to larger default size but centered
+            # Fallback to multi-column layout size but centered
             try:
-                screen_width, screen_height = detect_screen_size()
-                fallback_width, fallback_height = 600, 800  # Increased from 225, 920
+                # Try to use lazy loaded functions if available
+                try:
+                    detect_screen_size, calculate_optimal_window_size, get_screen_info = lazy_load_utils()
+                    screen_width, screen_height = detect_screen_size()
+                except:
+                    # Ultimate fallback if utils can't be loaded
+                    screen_width, screen_height = 1200, 800
+
+                fallback_width, fallback_height = 1000, 800  # Multi-column layout size
                 x = (screen_width - fallback_width) // 2
                 y = (screen_height - fallback_height) // 2
                 self.root.geometry(f"{fallback_width}x{fallback_height}+{x}+{y}")
                 self.root.resizable(True, True)
-                self.root.minsize(600, 800)  # Increased minimum size
+                self.root.minsize(1000, 800)  # Multi-column minimum size
                 print(f"📐 Fallback window: {fallback_width}x{fallback_height}")
             except:
-                # Ultimate fallback - larger default
-                self.root.geometry("600x800")  # Increased from 450x920
+                # Ultimate fallback - multi-column layout
+                self.root.geometry("1000x800")  # Multi-column layout size
                 self.root.resizable(True, True)
-                self.root.minsize(600, 800)
+                self.root.minsize(1000, 800)
                 print("📐 Using default window size")
 
     def setup_mouse_wheel_scrolling(self, scrollable_frame):
@@ -405,108 +454,300 @@ class App:
         # Create main container with scrollable area
         self.create_scrollable_container()
 
-        # Create the main content frame inside the scrollable area using platform styling
-        frame = platform_styles.create_frame(self.scrollable_frame)
-        frame.pack(pady=10, fill="both", expand=True)
+        # Create the main content frame with multi-column layout
+        main_frame = platform_styles.create_frame(self.scrollable_frame)
+        main_frame.pack(pady=15, fill="both", expand=True)
 
-        # Title (centered above inputs) using platform styling
-        title_label = platform_styles.create_label(frame, "DCST Tool", style_type='title')
+        # Configure main frame for 2-column layout
+        main_frame.grid_columnconfigure(0, weight=2, minsize=400)  # Left column (parameters)
+        main_frame.grid_columnconfigure(1, weight=3, minsize=500)  # Right column (controls & details)
+        main_frame.grid_rowconfigure(0, weight=0)  # Title row
+        main_frame.grid_rowconfigure(1, weight=1)  # Content row
+
+        # Title spanning both columns
+        title_label = platform_styles.create_label(main_frame, "DCST Tool", style_type='title')
         title_label.configure(font=platform_styles.get_font(18, 'bold'))
         title_label.grid(row=0, column=0, columnspan=2, pady=(10, 20))
 
-        # Add GitHub icon
-        self.add_github_icon(frame)
+        # Create left column (Parameter Input)
+        self.create_left_column(main_frame)
 
-        # Input for number of nodes using platform styling
-        platform_styles.create_label(frame, "Small Instance:").grid(row=1, column=0, padx=5, pady=5, sticky='w')
-        platform_styles.create_entry(frame, textvariable=self.n_small, width=10).grid(row=1, column=1, padx=5, pady=5)
+        # Create right column (Controls and Details)
+        self.create_right_column(main_frame)
 
-        platform_styles.create_label(frame, "Medium Instance:").grid(row=2, column=0, padx=5, pady=5, sticky='w')
-        platform_styles.create_entry(frame, textvariable=self.n_medium, width=10).grid(row=2, column=1, padx=5, pady=5)
+        # Footer section with GitHub logo and University text
+        self.create_footer()
 
-        platform_styles.create_label(frame, "Large Instance:").grid(row=3, column=0, padx=5, pady=5, sticky='w')
-        platform_styles.create_entry(frame, textvariable=self.n_large, width=10).grid(row=3, column=1, padx=5, pady=5)
+    def create_left_column(self, parent):
+        """Create the left column with parameter inputs."""
+        # Left column frame
+        left_frame = platform_styles.create_frame(parent)
+        left_frame.grid(row=1, column=0, sticky="nsew", padx=(0, 10), pady=10)
 
-        # Input for max_children (k) using platform styling
-        platform_styles.create_label(frame, "Maximum Children:").grid(row=4, column=0, padx=5, pady=5, sticky='w')
-        platform_styles.create_entry(frame, textvariable=self.max_children, width=10).grid(row=4, column=1, padx=5, pady=5)
+        # Configure left frame grid
+        left_frame.grid_columnconfigure(1, weight=1)
 
-        platform_styles.create_label(frame, "Penalty:").grid(row=5, column=0, padx=5, pady=5, sticky='w')
-        platform_styles.create_entry(frame, textvariable=self.penalty, width=10).grid(row=5, column=1, padx=5, pady=5)
+        # Parameter input section
+        param_label = platform_styles.create_label(left_frame, "Instance Parameters", style_type='primary')
+        param_label.configure(font=platform_styles.get_font(14, 'bold'))
+        param_label.grid(row=0, column=0, columnspan=2, pady=(0, 15), sticky='w')
 
-        # New p parameter system using platform styling
+        # Input for number of nodes using platform styling with improved spacing
+        platform_styles.create_label(left_frame, "Small Instance:").grid(row=1, column=0, padx=10, pady=8, sticky='w')
+        platform_styles.create_entry(left_frame, textvariable=self.n_small, width=12).grid(row=1, column=1, padx=10, pady=8, sticky='ew')
+
+        platform_styles.create_label(left_frame, "Medium Instance:").grid(row=2, column=0, padx=10, pady=8, sticky='w')
+        platform_styles.create_entry(left_frame, textvariable=self.n_medium, width=12).grid(row=2, column=1, padx=10, pady=8, sticky='ew')
+
+        platform_styles.create_label(left_frame, "Large Instance:").grid(row=3, column=0, padx=10, pady=8, sticky='w')
+        platform_styles.create_entry(left_frame, textvariable=self.n_large, width=12).grid(row=3, column=1, padx=10, pady=8, sticky='ew')
+
+        # Input for max_children (k) using platform styling with improved spacing
+        platform_styles.create_label(left_frame, "Maximum Children:").grid(row=4, column=0, padx=10, pady=8, sticky='w')
+        platform_styles.create_entry(left_frame, textvariable=self.max_children, width=12).grid(row=4, column=1, padx=10, pady=8, sticky='ew')
+
+        platform_styles.create_label(left_frame, "Penalty:").grid(row=5, column=0, padx=10, pady=8, sticky='w')
+        platform_styles.create_entry(left_frame, textvariable=self.penalty, width=12).grid(row=5, column=1, padx=10, pady=8, sticky='ew')
+
+        # Connection multiplier section
+        multiplier_label = platform_styles.create_label(left_frame, "Connection Settings", style_type='primary')
+        multiplier_label.configure(font=platform_styles.get_font(12, 'bold'))
+        multiplier_label.grid(row=6, column=0, columnspan=2, pady=(20, 10), sticky='w')
+
         # Global multiplier slider
-        platform_styles.create_label(frame, "Connection Multiplier:").grid(row=6, column=0, padx=5, pady=5, sticky='w')
-        self.p_multiplier_scale = platform_styles.create_scale(frame, variable=self.p_multiplier, from_=0, to=3,
+        platform_styles.create_label(left_frame, "Connection Multiplier:").grid(row=7, column=0, padx=10, pady=10, sticky='w')
+        self.p_multiplier_scale = platform_styles.create_scale(left_frame, variable=self.p_multiplier, from_=0, to=3,
                                                               resolution=0.1, orient="horizontal",
                                                               command=self.on_multiplier_change)
-        self.p_multiplier_scale.grid(row=6, column=1, padx=5, pady=5)
+        self.p_multiplier_scale.grid(row=7, column=1, padx=10, pady=10, sticky='ew')
 
         # Multiplier value label
-        self.multiplier_label = platform_styles.create_label(frame, "1.0x", style_type='accent')
-        self.multiplier_label.configure(font=platform_styles.get_font(10))
-        self.multiplier_label.grid(row=6, column=2, padx=5, pady=5)
+        self.multiplier_label = platform_styles.create_label(left_frame, "1.0x", style_type='accent')
+        self.multiplier_label.configure(font=platform_styles.get_font(10, 'bold'))
+        self.multiplier_label.grid(row=8, column=0, columnspan=2, padx=10, pady=5)
 
-        # Advanced mode checkbox
-        self.advanced_checkbox = platform_styles.create_checkbutton(frame, "Advanced Mode",
+        # Advanced mode checkbox with better spacing
+        self.advanced_checkbox = platform_styles.create_checkbutton(left_frame, "Advanced Mode",
                                                                    variable=self.advanced_mode,
                                                                    command=self.toggle_advanced_mode)
-        self.advanced_checkbox.grid(row=7, column=0, columnspan=2, padx=5, pady=5, sticky="w")
+        self.advanced_checkbox.grid(row=9, column=0, columnspan=2, padx=10, pady=15, sticky="w")
 
-        # Advanced p sliders (initially hidden)
-        self.create_advanced_p_controls(frame)
+        # Advanced controls (initially hidden)
+        self.create_advanced_p_controls(left_frame)
 
-        # Button to start calculations using platform styling
-        start_button = platform_styles.create_button(frame, "Start", command=self.start_computation,
-                                                    style_type='primary')
-        start_button.grid(row=12, column=0, pady=20, padx=10)
+    def create_right_column(self, parent):
+        """Create the right column with controls and details."""
+        # Right column frame
+        right_frame = platform_styles.create_frame(parent)
+        right_frame.grid(row=1, column=1, sticky="nsew", padx=(10, 0), pady=10)
 
-        # Button to stop calculations using platform styling
-        stop_button = platform_styles.create_button(frame, "Stop", command=self.stop_computation,
-                                                   style_type='error')
-        stop_button.grid(row=12, column=1, pady=20, padx=10)
+        # Configure right frame grid
+        right_frame.grid_columnconfigure(0, weight=1)
+        right_frame.grid_rowconfigure(2, weight=1)  # Make details section expandable
 
-        # Configuration management buttons using platform styling
-        config_frame = platform_styles.create_frame(frame)
-        config_frame.grid(row=13, column=0, columnspan=4, pady=10)
+        # Control buttons section
+        control_label = platform_styles.create_label(right_frame, "Optimization Controls", style_type='primary')
+        control_label.configure(font=platform_styles.get_font(14, 'bold'))
+        control_label.grid(row=0, column=0, pady=(0, 15), sticky='w')
 
-        export_config_btn = platform_styles.create_button(config_frame, "Export Config",
-                                                         command=self.export_configuration,
-                                                         style_type='secondary', width=15)
-        export_config_btn.grid(row=0, column=0, padx=10)
+        # Button frame for better organization
+        button_frame = platform_styles.create_frame(right_frame)
+        button_frame.grid(row=1, column=0, pady=(0, 20), sticky='ew')
+        button_frame.grid_columnconfigure(0, weight=1)
+        button_frame.grid_columnconfigure(1, weight=1)
 
-        import_config_btn = platform_styles.create_button(config_frame, "Import Config",
-                                                         command=self.import_configuration,
-                                                         style_type='success', width=15)
-        import_config_btn.grid(row=0, column=1, padx=10)
+        # Button to start calculations - larger and more prominent
+        start_button = platform_styles.create_button(button_frame, "Start Optimization",
+                                                    command=self.start_computation,
+                                                    style_type='primary', width=20)
+        start_button.grid(row=0, column=0, pady=10, padx=(0, 10), sticky='ew')
 
-        # Label for status details using platform styling
-        self.status_details = platform_styles.create_label(self.scrollable_frame, "", style_type='accent')
-        self.status_details.configure(wraplength=400)  # Increased wrap length for larger window
-        self.status_details.pack(pady=5)
+        # Button to stop calculations - larger and more prominent
+        stop_button = platform_styles.create_button(button_frame, "Stop Optimization",
+                                                   command=self.stop_computation,
+                                                   style_type='error', width=20)
+        stop_button.grid(row=0, column=1, pady=10, padx=(10, 0), sticky='ew')
 
-    def add_github_icon(self, frame):
+        # Progress section
+        progress_label = platform_styles.create_label(right_frame, "Progress & Status", style_type='primary')
+        progress_label.configure(font=platform_styles.get_font(12, 'bold'))
+        progress_label.grid(row=2, column=0, pady=(20, 10), sticky='w')
+
+        # Progress bar container
+        progress_container = platform_styles.create_frame(right_frame)
+        progress_container.grid(row=3, column=0, sticky='ew', pady=(0, 10))
+
+        self.progress_bar = ttk.Progressbar(progress_container, orient="horizontal", length=400, mode="determinate")
+        self.progress_bar.pack(pady=5, fill='x')
+
+        # Label for progress bar status
+        self.progress_label = platform_styles.create_label(progress_container, "Ready to start...")
+        self.progress_label.pack(pady=2)
+
+        # Real-time Parameters section (expanded)
+        self.create_realtime_params_section(right_frame)
+
+        # Performance Details section (expanded)
+        self.create_performance_details_section(right_frame)
+
+        # Status details
+        self.status_details = platform_styles.create_label(right_frame, "", style_type='accent')
+        self.status_details.configure(wraplength=600)  # Increased wrap length for right column
+        self.status_details.grid(row=7, column=0, pady=8, sticky='ew')
+
+    def create_realtime_params_section(self, parent):
+        """Create the real-time parameters section (expanded)."""
+        # Panel for dynamic parameters - Expanded layout
+        self.dynamic_params_frame = tk.LabelFrame(parent, text="Real-time Parameters",
+                                                bg=self.colors['bg_primary'], fg=self.colors['text_primary'],
+                                                font=platform_styles.get_font(12, 'bold'),
+                                                relief="groove", bd=3)
+        self.dynamic_params_frame.grid(row=4, column=0, sticky='ew', padx=0, pady=(10, 15), ipady=12)
+
+        # Configure columns for uniform distribution
+        for i in range(3):
+            self.dynamic_params_frame.columnconfigure(i, weight=1, uniform="equal")
+
+        # First row: Main algorithm parameters - Increased font size and padding
+        self.iter_label = tk.Label(self.dynamic_params_frame, text="Iterations: -",
+                                 bg=self.colors['bg_primary'], fg=self.colors['text_accent'],
+                                 font=platform_styles.get_font(10, 'bold'),
+                                 anchor="w", width=18)
+        self.iter_label.grid(row=0, column=0, padx=12, pady=8, sticky="ew")
+
+        self.temp_label = tk.Label(self.dynamic_params_frame, text="Temperature: -",
+                                 bg=self.colors['bg_primary'], fg=self.colors['text_accent'],
+                                 font=platform_styles.get_font(10, 'bold'),
+                                 anchor="w", width=18)
+        self.temp_label.grid(row=0, column=1, padx=12, pady=8, sticky="ew")
+
+        self.cost_label = tk.Label(self.dynamic_params_frame, text="Current Cost: -",
+                                 bg=self.colors['bg_primary'], fg=self.colors['success_color'],
+                                 font=platform_styles.get_font(10, 'bold'),
+                                 anchor="w", width=18)
+        self.cost_label.grid(row=0, column=2, padx=12, pady=8, sticky="ew")
+
+        # Second row: Performance metrics - Increased font size and padding
+        self.accepted_label = tk.Label(self.dynamic_params_frame, text="Acceptances: -",
+                                     bg=self.colors['bg_primary'], fg=self.colors['success_color'],
+                                     font=platform_styles.get_font(10, 'bold'),
+                                     anchor="w", width=18)
+        self.accepted_label.grid(row=1, column=0, padx=12, pady=8, sticky="ew")
+
+        self.plateau_label = tk.Label(self.dynamic_params_frame, text="Plateau: -",
+                                    bg=self.colors['bg_primary'], fg=self.colors['warning_color'],
+                                    font=platform_styles.get_font(10, 'bold'),
+                                    anchor="w", width=18)
+        self.plateau_label.grid(row=1, column=1, padx=12, pady=8, sticky="ew")
+
+        self.reheat_label = tk.Label(self.dynamic_params_frame, text="Reheat: -",
+                                   bg=self.colors['bg_primary'], fg=self.colors['warning_color'],
+                                   font=platform_styles.get_font(10, 'bold'),
+                                   anchor="w", width=18)
+        self.reheat_label.grid(row=1, column=2, padx=12, pady=8, sticky="ew")
+
+    def create_performance_details_section(self, parent):
+        """Create the performance details section (expanded)."""
+        # Text area with scrollbar for execution details - Expanded size
+        self.log_frame = platform_styles.create_frame(parent)
+        self.log_frame.grid(row=5, column=0, sticky='nsew', pady=(15, 10))
+
+        # Label for the log
+        self.log_header = platform_styles.create_label(self.log_frame, "Performance Details", style_type='primary')
+        self.log_header.configure(anchor="w", font=platform_styles.get_font(12, 'bold'))
+        self.log_header.pack(fill="x", padx=8, pady=4)
+
+        # Use platform-appropriate colors for log text - Expanded height
+        log_bg = self.colors.get('bg_secondary', '#1e1e1e')
+        log_fg = self.colors.get('text_secondary', '#cccccc')
+        self.log_text = tk.scrolledtext.ScrolledText(self.log_frame, height=15, bg=log_bg, fg=log_fg,
+                                                wrap=tk.WORD, font=("Consolas", 9))
+        self.log_text.pack(fill="both", expand=True, padx=4, pady=4)
+        self.log_text.config(state=tk.DISABLED)  # Read-only
+
+        # Configure text tags for different log levels and performance metrics
+        self.log_text.tag_config("timestamp", foreground="#999999")
+        self.log_text.tag_config("info", foreground="#cccccc")
+        self.log_text.tag_config("success", foreground="#00cc00")
+        self.log_text.tag_config("warning", foreground="#ffcc00")
+        self.log_text.tag_config("error", foreground="#ff3333")
+        self.log_text.tag_config("highlight", foreground="#3399ff")
+        self.log_text.tag_config("performance", foreground="#ff9900")  # Orange for performance metrics
+
+    def lazy_init_heavy_components(self):
+        """Initialize heavy components after the main window is shown."""
+        try:
+            # Load heavy imports when needed
+            lazy_load_heavy_imports()
+
+            # Initialize any heavy components here
+            # (Currently most heavy initialization is done on-demand)
+
+        except Exception as e:
+            logging.error(f"Error in lazy initialization: {e}")
+
+    def create_footer(self):
+        """Create footer section with GitHub logo and University text."""
+        # Footer frame - add to main scrollable frame
+        footer_frame = platform_styles.create_frame(self.scrollable_frame)
+        footer_frame.pack(fill="x", padx=15, pady=(20, 15), side="bottom")
+
+        # Configure footer grid
+        footer_frame.grid_columnconfigure(0, weight=1)  # Left spacer
+        footer_frame.grid_columnconfigure(1, weight=0)  # GitHub icon
+        footer_frame.grid_columnconfigure(2, weight=0)  # University text
+        footer_frame.grid_columnconfigure(3, weight=1)  # Right spacer
+
+        # Add GitHub icon
+        self.add_github_icon_to_footer(footer_frame)
+
+        # Add University text
+        university_label = platform_styles.create_label(footer_frame, "University of Ferrara - 2025", style_type='secondary')
+        university_label.configure(font=platform_styles.get_font(9), anchor="w")
+        university_label.grid(row=0, column=2, padx=(10, 0), pady=5, sticky="w")
+
+    def add_github_icon_to_footer(self, footer_frame):
+        """Add GitHub icon to footer."""
         try:
             script_dir = os.path.dirname(os.path.abspath(__file__))
             icon_path = os.path.join(script_dir, "github.png")
             if os.path.exists(icon_path):
+                # Lazy load PIL when needed
+                pd, Image, ImageTk = lazy_load_heavy_imports()
                 pil_image = Image.open(icon_path)
+                # Resize icon to be smaller for footer
+                pil_image = pil_image.resize((20, 20), Image.Resampling.LANCZOS)
                 github_icon = ImageTk.PhotoImage(pil_image)
                 github_button = tk.Button(
-                    frame,
+                    footer_frame,
                     image=github_icon,
                     command=self.open_github,
                     bg=self.colors['bg_primary'],
                     borderwidth=0,
                     highlightthickness=0,
-                    relief='flat'
+                    relief='flat',
+                    cursor='hand2'
                 )
+                # Store reference to prevent garbage collection
                 github_button.image = github_icon
-                github_button.grid(row=0, column=1, padx=10, pady=10, sticky="e")  # Positioned to the right of the title
+                github_button.grid(row=0, column=1, padx=(0, 5), pady=5)
+                return  # Success, no need for fallback
             else:
-                print(f"File not found: {icon_path}")
-        except Exception as e:
-            print(f"Error loading icon: {str(e)}")
+                pass  # GitHub icon file not found, will use fallback
+        except Exception:
+            pass  # Error loading GitHub icon, will use fallback
+
+        # Fallback to text link if icon fails or doesn't exist
+        github_text = tk.Label(
+            footer_frame,
+            text="GitHub",
+            fg=self.colors['text_accent'],
+            bg=self.colors['bg_primary'],
+            font=platform_styles.get_font(9, 'underline'),
+            cursor='hand2'
+        )
+        github_text.bind("<Button-1>", lambda e: self.open_github())
+        github_text.grid(row=0, column=1, padx=(0, 5), pady=5)
 
     def open_github(self):
         webbrowser.open("https://github.com/Focaccina-Ripiena37/Degree-Constrained-Spanning-Tree-Tool.git")
@@ -706,7 +947,7 @@ class App:
         else:
             # User chose "No" (Cancel) - restore safe value
             self.revert_field_to_safe_value(field_name, safe_value)
-            self.log_message(f"✅ Parameter {field_name} restored to safe value: {safe_value}", "info")
+            self.log_message(f"Parameter {field_name} restored to safe value: {safe_value}", "info")
             return False
 
     def revert_field_to_safe_value(self, field_name, safe_value):
@@ -956,6 +1197,8 @@ class App:
                     score = evaluate_solution(solution_data, reference_values)
                     row["Punteggio"] = score
 
+                # Lazy load pandas when needed
+                pd, Image, ImageTk = lazy_load_heavy_imports()
                 df = pd.DataFrame(table_data)
                 table_filename = os.path.join(plot_dir, "partial_results_table.png")
                 save_table_as_image(df, table_filename)
@@ -1116,17 +1359,23 @@ class App:
     def _process_message(self, msg_type, msg_value):
         """Process a single message from the queue (called from main thread)."""
         try:
-            if msg_type == "temperature":
+            # Enhanced parameter tracking with more frequent updates
+            if msg_type == "temperature" or msg_type == "temp":
                 self.temp_label.config(text=f"Temperature: {msg_value}")
-            elif msg_type == "iteration":
+            elif msg_type == "iteration" or msg_type == "iter":
                 self.iter_label.config(text=f"Iterations: {msg_value}")
             elif msg_type == "cost":
-                self.cost_label.config(text=f"Current Cost: {msg_value}")
+                # Format cost values for better readability
+                if isinstance(msg_value, (int, float)):
+                    formatted_cost = f"{msg_value:,.0f}" if msg_value >= 1000 else f"{msg_value:.2f}"
+                    self.cost_label.config(text=f"Current Cost: {formatted_cost}")
+                else:
+                    self.cost_label.config(text=f"Current Cost: {msg_value}")
             elif msg_type == "plateau":
                 self.plateau_label.config(text=f"Plateau: {msg_value}")
             elif msg_type == "reheats":
                 self.reheat_label.config(text=f"Reheat: {msg_value}")
-            elif msg_type == "accepted":
+            elif msg_type == "accepted" or msg_type == "accept":
                 self.accepted_label.config(text=f"Acceptances: {msg_value}")
             elif msg_type == "log":
                 msg, level = msg_value
@@ -1169,12 +1418,19 @@ class App:
         with detailed status updates.
         """
         try:
+            # Lazy load algorithm modules when computation starts
+            (test_instance, evaluate_solution, generate_connected_random_graph,
+             draw_and_save_graph, save_table_as_image, batch_generate_images,
+             clear_image_cache, _cleanup_image_thread_pool, reset_plot_directory,
+             get_current_plot_directory, detect_screen_size, calculate_optimal_window_size,
+             get_screen_info, get_enhanced_visualization, get_performance_tracker) = lazy_load_algorithms()
+
             # Reset plot directory for new calculation session
             reset_plot_directory()
 
             # Get the new plot directory and inform the user
             plot_dir = get_current_plot_directory()
-            self.queue.put(("log", (f"📁 Results will be saved in: {plot_dir}", "info")))
+            self.queue.put(("log", (f"Results will be saved in: {plot_dir}", "info")))
         except Exception as e:
             error_msg = f"Failed to initialize plot directory: {e}"
             logging.error(error_msg)
@@ -1290,9 +1546,10 @@ class App:
                         progress_info=progress_info
                     )
                 except Exception as e:
+                    import traceback as tb  # Import locally to avoid any scoping issues
                     error_msg = f"Error in optimization for {instance_name}: {e}"
                     logging.error(error_msg)
-                    logging.error(f"Traceback: {traceback.format_exc()}")
+                    logging.error(f"Traceback: {tb.format_exc()}")
                     self.queue.put(("error", error_msg))
                     # Continue with next instance instead of stopping all calculations
                     continue
@@ -1317,21 +1574,19 @@ class App:
                 report_file = os.path.join(plot_dir, "performance_report.txt")
                 with open(report_file, 'w') as f:
                     f.write(report_content)
-                self.queue.put(("log", (f"📊 Performance report saved: {report_file}", "info")))
+                self.queue.put(("log", (f"Performance report saved: {report_file}", "info")))
 
                 # Export detailed performance data
                 perf_data_file = os.path.join(plot_dir, "detailed_performance_data.json")
                 performance_tracker.export_performance_data(perf_data_file)
-                self.queue.put(("log", (f"📈 Detailed performance data exported: {perf_data_file}", "info")))
+                self.queue.put(("log", (f"Detailed performance data exported: {perf_data_file}", "info")))
 
             except Exception as e:
                 logging.warning(f"Could not generate performance report: {e}")
 
-            self.queue.put(("log", ("✅ Optimization completed with enhanced analytics!", "success")))
-            self.queue.put(("progress", 100))
-
-            # Keep progress bar at 100% for 3 seconds then reset
-            self.root.after(3000, self.reset_progress_bar)
+            self.queue.put(("log", ("Optimization completed with enhanced analytics!", "success")))
+            self.queue.put(("progress", 85))  # Set to 85% - still have image generation remaining
+            self.queue.put(("status", "Optimization complete, preparing results..."))
 
         except Exception as e:
             self.queue.put(("error", f"Error during optimization: {str(e)}"))
@@ -1393,9 +1648,9 @@ class App:
                 "large": "Large"
             }
 
-            # 🚀 PERFORMANCE IMPROVEMENT: Batch image generation using parallel processing
+            # PERFORMANCE IMPROVEMENT: Batch image generation using parallel processing
             self.queue.put(("status", "Preparing batch image generation..."))
-            self.queue.put(("log", ("🚀 Using parallel image generation to improve performance", "info")))
+            self.queue.put(("log", ("Using parallel image generation to improve performance", "info")))
 
             # Prepare all image generation tasks
             image_tasks = []
@@ -1428,22 +1683,24 @@ class App:
 
             # Execute batch image generation with progress tracking
             if image_tasks:
-                self.queue.put(("log", (f"🎨 Generating {len(image_tasks)} images in parallel...", "info")))
+                self.queue.put(("log", (f"Generating {len(image_tasks)} images in parallel...", "info")))
 
                 def image_progress_callback(completed, total):
-                    progress_pct = (completed / total) * (progress_increment * len(image_tasks))
-                    current_progress = start_progress + progress_pct
-                    self.queue.put(("progress", int(current_progress)))
+                    # Calculate progress from 85% to 99% during image generation
+                    image_progress_range = 14  # From 85% to 99% (14 percentage points)
+                    progress_pct = (completed / total) * image_progress_range
+                    current_progress = 85 + progress_pct  # Start from 85% (after optimization)
+                    self.queue.put(("progress", int(min(99, current_progress))))  # Cap at 99% until all done
                     if completed <= len(image_descriptions):
                         desc = image_descriptions[completed-1] if completed > 0 else "Image"
-                        self.queue.put(("status", f"Completed: {desc} ({completed}/{total})"))
-                        self.queue.put(("log", (f"✅ {desc} generated ({completed}/{total})", "success")))
+                        self.queue.put(("status", f"Generating images: {desc} ({completed}/{total})"))
+                        self.queue.put(("log", (f"Image generated: {desc} ({completed}/{total})", "success")))
 
                 # Use batch generation for improved performance
                 results_batch = batch_generate_images(image_tasks, image_progress_callback)
 
                 successful_images = sum(1 for result in results_batch if result)
-                self.queue.put(("log", (f"🎉 Image generation completed: {successful_images}/{len(image_tasks)} successes", "success")))
+                self.queue.put(("log", (f"Image generation completed: {successful_images}/{len(image_tasks)} successes", "success")))
 
                 # Update image count for subsequent progress calculations
                 image_count = len(image_tasks)
@@ -1515,11 +1772,13 @@ class App:
                     row["Score"] = score
 
             if table_data:
+                # Lazy load pandas when needed
+                pd, Image, ImageTk = lazy_load_heavy_imports()
                 df = pd.DataFrame(table_data)
 
                 # Find and highlight the best solution
                 best_solution = df.loc[df["Score"].idxmax()]
-                self.queue.put(("log", ("🏆 BEST SOLUTION FOUND:", "highlight")))
+                self.queue.put(("log", ("BEST SOLUTION FOUND:", "highlight")))
                 self.queue.put(("log", (f"{best_solution['Instance']} - {best_solution['Algorithm']}: "
                                       f"Score={best_solution['Score']}, Cost={best_solution['Cost']}, "
                                       f"Violations={best_solution['Violations']}, Time={best_solution['Time (s)']}", "success")))
@@ -1532,7 +1791,7 @@ class App:
                                           f"Time={row['Time (s)']}, Calls={row['Calls']}, "
                                           f"Memory={row['Memory (KB)']} KB", "performance")))
 
-                # 🚀 PERFORMANCE IMPROVEMENT: Async table generation
+                # PERFORMANCE IMPROVEMENT: Async table generation
                 table_filename = os.path.join(plot_dir, f"comparison_table{params_suffix}.png")
                 self.queue.put(("status", "Generating comparison table..."))
                 table_future = save_table_as_image(df, table_filename, async_mode=True)
@@ -1541,11 +1800,11 @@ class App:
                 try:
                     table_result = table_future.result(timeout=30)  # 30 second timeout
                     if table_result:
-                        self.queue.put(("log", (f"📊 Comparison table saved: {table_filename}", "success")))
+                        self.queue.put(("log", (f"Comparison table saved: {table_filename}", "success")))
                     else:
-                        self.queue.put(("log", ("⚠️ Error in table generation", "warning")))
+                        self.queue.put(("log", ("Error in table generation", "warning")))
                 except Exception as e:
-                    self.queue.put(("log", (f"❌ Error in table generation: {e}", "error")))
+                    self.queue.put(("log", (f"Error in table generation: {e}", "error")))
 
                 # Update progress for the last image
                 image_count += 1
@@ -1616,8 +1875,11 @@ class App:
                         logging.warning(f"Could not create enhanced convergence analysis for {size_name}: {e}")
 
             self.queue.put(("status", "All images created successfully"))
-            self.queue.put(("progress", 100))  # Ensure progress bar reaches 100%
-            self.queue.put(("log", ("Results saved successfully.", "success")))
+            self.queue.put(("progress", 100))  # NOW we can set to 100% - all operations complete
+            self.queue.put(("log", ("All operations completed successfully!", "success")))
+
+            # Keep progress bar at 100% for 3 seconds then reset
+            self.root.after(3000, self.reset_progress_bar)
 
         except Exception as e:
             logging.error(f"Error saving results: {e}")
@@ -1627,163 +1889,13 @@ class App:
             clear_image_cache()
             _cleanup_image_thread_pool()
 
-    # Configuration Management Methods
-    def get_current_configuration(self):
-        """Get current GUI configuration as a dictionary."""
-        config = {
-            "version": "1.0",
-            "timestamp": datetime.now().isoformat(),
-            "parameters": {
-                "n_small": self.n_small.get(),
-                "n_medium": self.n_medium.get(),
-                "n_large": self.n_large.get(),
-                "max_children": self.max_children.get(),
-                "penalty": self.penalty.get(),
-                "p_multiplier": self.p_multiplier.get(),
-                "advanced_mode": self.advanced_mode.get(),
-                "p_small_base": self.p_small_base.get(),
-                "p_medium_base": self.p_medium_base.get(),
-                "p_large_base": self.p_large_base.get()
-            }
-        }
-        return config
+    # Configuration Management Methods removed
 
-    def apply_configuration(self, config):
-        """Apply configuration to GUI elements."""
-        try:
-            params = config.get("parameters", {})
 
-            # Apply basic parameters
-            self.n_small.set(params.get("n_small", 10))
-            self.n_medium.set(params.get("n_medium", 50))
-            self.n_large.set(params.get("n_large", 200))
-            self.max_children.set(params.get("max_children", 3))
-            self.penalty.set(params.get("penalty", 1000))
-            self.p_multiplier.set(params.get("p_multiplier", 1.0))
 
-            # Apply advanced mode settings
-            self.advanced_mode.set(params.get("advanced_mode", False))
-            self.p_small_base.set(params.get("p_small_base", 0.4))
-            self.p_medium_base.set(params.get("p_medium_base", 0.3))
-            self.p_large_base.set(params.get("p_large_base", 0.15))
 
-            # Update GUI state
-            self.toggle_advanced_mode()
-            self.on_multiplier_change(self.p_multiplier.get())
 
-            return True
-        except Exception as e:
-            logging.error(f"Error applying configuration: {e}")
-            return False
 
-    def export_configuration(self):
-        """Export current configuration to a shareable location."""
-        try:
-            # Default to Desktop for easy sharing
-            desktop_path = os.path.join(os.path.expanduser("~"), "Desktop")
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            default_filename = f"dcst_config_export_{timestamp}.json"
-
-            filename = filedialog.asksaveasfilename(
-                title="Export Configuration",
-                defaultextension=".json",
-                filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
-                initialdir=desktop_path,
-                initialfile=default_filename
-            )
-
-            if filename:
-                config = self.get_current_configuration()
-                config["name"] = f"Exported_{os.path.splitext(os.path.basename(filename))[0]}"
-                config["exported"] = True
-                config["export_timestamp"] = datetime.now().isoformat()
-
-                with open(filename, 'w') as f:
-                    json.dump(config, f, indent=2)
-
-                messagebox.showinfo("Success", f"Configuration exported successfully to:\n{filename}")
-                self.log_message(f"Configuration exported: {filename}", "success")
-
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to export configuration:\n{str(e)}")
-            self.log_message(f"Error exporting configuration: {e}", "error")
-
-    def import_configuration(self):
-        """Import configuration from an external file."""
-        try:
-            filename = filedialog.askopenfilename(
-                title="Import Configuration",
-                filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
-                initialdir=os.path.expanduser("~")
-            )
-
-            if filename:
-                with open(filename, 'r') as f:
-                    config = json.load(f)
-
-                # Validate configuration
-                if not self.validate_configuration(config):
-                    messagebox.showerror("Error", "Invalid configuration file format")
-                    return
-
-                if self.apply_configuration(config):
-                    messagebox.showinfo("Success", f"Configuration imported successfully from:\n{filename}")
-                    self.log_message(f"Configuration imported: {filename}", "success")
-                else:
-                    messagebox.showerror("Error", "Failed to apply imported configuration")
-
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to import configuration:\n{str(e)}")
-            self.log_message(f"Error importing configuration: {e}", "error")
-
-    def validate_configuration(self, config):
-        """Validate configuration file format and content with detailed error reporting."""
-        try:
-            if not isinstance(config, dict):
-                logging.warning("Configuration validation failed: config is not a dictionary")
-                return False
-
-            params = config.get("parameters", {})
-            if not isinstance(params, dict):
-                logging.warning("Configuration validation failed: parameters is not a dictionary")
-                return False
-
-            # Check for required parameters with type and range validation
-            required_params = {
-                "n_small": (int, 1, 1000),
-                "n_medium": (int, 1, 2000),
-                "n_large": (int, 1, 5000),
-                "max_children": (int, 1, 20),
-                "penalty": (int, 1, 100000)
-            }
-
-            for param, (expected_type, min_val, max_val) in required_params.items():
-                if param not in params:
-                    logging.warning(f"Configuration validation failed: missing required parameter '{param}'")
-                    return False
-
-                value = params[param]
-                if not isinstance(value, expected_type):
-                    logging.warning(f"Configuration validation failed: '{param}' should be {expected_type.__name__}, got {type(value).__name__}")
-                    return False
-
-                if not (min_val <= value <= max_val):
-                    logging.warning(f"Configuration validation failed: '{param}' value {value} outside valid range [{min_val}, {max_val}]")
-                    return False
-
-            # Validate logical constraints
-            if params["n_small"] >= params["n_medium"]:
-                logging.warning("Configuration validation failed: n_small should be less than n_medium")
-                return False
-            if params["n_medium"] >= params["n_large"]:
-                logging.warning("Configuration validation failed: n_medium should be less than n_large")
-                return False
-
-            logging.info("Configuration validation passed")
-            return True
-        except Exception as e:
-            logging.error(f"Configuration validation error: {e}")
-            return False
 
     def format_time(self, time_value):
         """

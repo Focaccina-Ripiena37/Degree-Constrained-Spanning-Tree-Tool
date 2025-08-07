@@ -375,10 +375,13 @@ class PlatformStyles:
         if self.is_macos:
             # macOS-specific window configuration
             try:
+                # Ensure window is properly initialized before setting appearance
+                window.update_idletasks()
+
                 # Set window appearance to match system theme
                 if self.is_dark_mode:
-                    # Force dark appearance
-                    window.tk.call('tk::unsupported::MacWindowStyle', 'appearance', window._w, 'darkAqua')
+                    # Force dark appearance (note: lowercase 'darkaqua')
+                    window.tk.call('tk::unsupported::MacWindowStyle', 'appearance', window._w, 'darkaqua')
                 else:
                     # Force light appearance
                     window.tk.call('tk::unsupported::MacWindowStyle', 'appearance', window._w, 'aqua')

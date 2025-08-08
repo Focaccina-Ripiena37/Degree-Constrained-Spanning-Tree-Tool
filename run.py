@@ -271,6 +271,12 @@ def main_without_splash():
             root.deiconify()
             root.lift()
             root.focus_force()
+
+            # Force window to be visible and on top
+            root.attributes('-topmost', True)
+            root.update()
+            root.attributes('-topmost', False)
+
             root.mainloop()
         else:
             sys.exit(1)

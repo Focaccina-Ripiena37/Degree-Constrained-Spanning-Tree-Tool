@@ -42,7 +42,8 @@ _app_modules_loaded = False
 
 # Import loading screen at module level for immediate availability
 try:
-    from app.loading_screen import LoadingScreen
+    # from app.loading_screen import LoadingScreen
+    from app.splash_screen import show_splash_screen
     _loading_screen_available = True
 except ImportError:
     _loading_screen_available = False
@@ -120,8 +121,11 @@ def set_application_icon(root):
         # Silently fail if icon loading fails
         return False
 
-def initialize_application_fast():
-    """Initialize the main application with optimized startup."""
+def initialize_application_fast(root=None):
+    """Initialize the main application with optimized startup.
+
+    If a Tk root is provided, reuse it to avoid creating multiple Tk instances.
+    """
     try:
         # Configure CPU optimization (minimal overhead)
         cpu_count = configure_cpu_optimization()
@@ -129,9 +133,16 @@ def initialize_application_fast():
         # Lazy load tkinter
         tk, ttk = lazy_load_tkinter()
 
-        # Create main window immediately
-        root = tk.Tk()
-        root.withdraw()  # Hide initially for faster startup
+        # Create or reuse main window (avoid multiple Tk roots)
+        if root is None:
+            root = tk.Tk()
+            root.withdraw()  # Hide initially for faster startup
+        else:
+            # Ensure it's hidden during setup
+            try:
+                root.withdraw()
+            except Exception:
+                pass
 
         # Set basic title (detailed system info will be loaded later)
         root.title("DCST Tool - Loading...")
@@ -181,14 +192,19 @@ def initialize_application_fast():
 
 def main():
     """Main application entry point with immediate loading screen."""
-    splash_screen = None
+    splash = None
     main_root = None
 
     try:
-        # Create and show loading screen immediately (pre-imported)
+        # Ensure tkinter is loaded and create ONE root
+        tk, _ttk = lazy_load_tkinter()
+        main_root = tk.Tk()
+        main_root.withdraw()
+
+        # Create and show loading screen immediately using the same root
         if _loading_screen_available:
-            splash_screen = LoadingScreen()
-            splash_root = splash_screen.create_splash()
+            splash = show_splash_screen(parent_root=main_root, duration=3.0, manual_mode=True)
+            splash_root = splash.splash_root if splash else None
         else:
             splash_root = None
 
@@ -197,38 +213,35 @@ def main():
             return main_without_splash()
 
         # Update splash screen and process events to make it visible immediately
-        splash_screen.update_progress(10, "Starting DCST Tool...")
-        splash_root.update()
+        splash.update_status("Starting DCST Tool...", 10)
         splash_root.update_idletasks()
-
-        # Initialize main application in background
-        splash_screen.update_progress(30, "Loading core modules...")
         splash_root.update()
 
-        # Initialize application with fast startup
-        result = initialize_application_fast()
+        # Initialize main application using the SAME root
+        splash.update_status("Loading core modules...", 30)
+        splash_root.update()
 
-        splash_screen.update_progress(70, "Setting up interface...")
+        result = initialize_application_fast(root=main_root)
+
+        splash.update_status("Setting up interface...", 70)
         splash_root.update()
 
         if result and len(result) == 2:
             main_root, app = result
 
-            splash_screen.update_progress(90, "Finalizing...")
+            splash.update_status("Finalizing...", 90)
             splash_root.update()
 
             # Prepare main window for display
             main_root.title("DCST Tool")  # Set final title
 
             # Close splash screen first
-            splash_screen.update_progress(100, "Ready!")
+            splash.update_status("Ready!", 100)
             splash_root.update()
             time.sleep(0.1)
 
             # Destroy splash screen completely
-            splash_screen.close()
-
-            # Small delay to ensure splash is fully closed
+            splash.close()
             time.sleep(0.1)
 
             # Show main application window
@@ -242,25 +255,32 @@ def main():
             main_root.mainloop()
 
         else:
-            if splash_screen:
-                splash_screen.close()
+            if splash:
+                splash.close()
             sys.exit(1)
 
     except KeyboardInterrupt:
-        if splash_screen:
-            splash_screen.close()
+        if splash:
+            splash.close()
         if main_root:
             main_root.quit()
         sys.exit(0)
 
     except Exception as e:
-        if splash_screen:
-            splash_screen.close()
+        if splash:
+            try:
+                splash.close()
+            except Exception:
+                pass
         if main_root:
-            main_root.quit()
+            try:
+                main_root.quit()
+            except Exception:
+                pass
         import traceback
         traceback.print_exc()
         sys.exit(1)
+
 
 def main_without_splash():
     """Fallback main function without splash screen."""

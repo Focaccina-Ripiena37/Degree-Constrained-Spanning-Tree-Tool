@@ -1,11 +1,26 @@
-networkx>=3.4.2
-matplotlib>=3.10.0
-pandas>=2.2.3
-tabulate>=0.9.0
-numpy>=2.2.4
-tqdm>=4.67.1
-Pillow>=11.1.0
-memory-profiler>=0.61.0
-psutil>=7.0.0
-scipy>=1.12.0
+#############################################
+# Degree-Constrained-Spanning-Tree Tool deps
+# Cross-platform: Windows/macOS/Linux
+# Python >= 3.10 (uses PEP 604 | types and modern stdlib)
+#############################################
+
+# Core runtime (required for app and tests)
+networkx>=3.4.2          # graph structures and algorithms
+matplotlib>=3.10.0       # plotting (non-interactive backend via Agg in code)
+
+# Optional GUI feature: combined summary table image
+# Enable this only if you want a PNG table (tests don't need it)
+# pandas>=2.2.3
+
+# Notes:
+# - Tkinter (GUI) è incluso nelle distribuzioni standard di Python su Windows/macOS.
+# - Su Linux, assicurati di avere le librerie di sistema per tkinter/matplotlib se usi ambienti minimali.
+# - Pillow arriva transitivamente da matplotlib quando necessario; non serve fissarlo qui.
+# - Il backend 'Agg' di matplotlib è già impostato nel codice e funziona su tutte le piattaforme.
+
+# Development/Test (uncomment locally as needed)
+# pytest>=8.0.0
+# pytest-cov>=5.0.0
+# black>=24.0.0
+# ruff>=0.6.0
 

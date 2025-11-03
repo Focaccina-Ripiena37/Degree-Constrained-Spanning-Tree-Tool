@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://img.shields.io/badge/Degree-Constrained%20Spanning%20Tree%20Tool-1.0-blue?style=for-the-badge&logo=python&logoColor=white" alt="Project Banner">
+  <img width="427" height="144" alt="image" src="https://github.com/user-attachments/assets/45470174-0874-4b6b-a99a-2ebfdc36363f" />
 </p>
 
 <h1 align="center">🌿 Degree-Constrained Spanning Tree Tool</h1>

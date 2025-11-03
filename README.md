@@ -236,7 +236,6 @@ I risultati sono salvati su Desktop nella cartella `Plot/`:
 </details>
 
 ## 📚 Documentazione
-Alcuni documenti storici possono citare funzionalità avanzate non più presenti.
 
 <details>
 

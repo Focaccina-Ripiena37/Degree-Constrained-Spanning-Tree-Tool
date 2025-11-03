@@ -1,5 +1,5 @@
 <p align="center">
-  <img width="427" height="144" alt="image" src="https://github.com/user-attachments/assets/45470174-0874-4b6b-a99a-2ebfdc36363f" />
+  <img width="2289" height="557" alt="Degree Constrained Spanning Tree Tool" src="https://github.com/user-attachments/assets/8d1bc073-583c-4dc6-a7b6-fea16e5e99c7" />
 </p>
 
 <h1 align="center">🌿 Degree-Constrained Spanning Tree Tool</h1>

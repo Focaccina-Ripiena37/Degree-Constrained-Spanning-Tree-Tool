@@ -39,7 +39,7 @@ OUTPUT: Albero di copertura T a costo minimo che rispetta il vincolo di grado (s
 
 ## 🎯 Approcci algoritmici
 
-<details>
+
 
 Il tool implementa e confronta tre strategie per il problema DCMST:
 
@@ -65,11 +65,11 @@ Il tool implementa e confronta tre strategie per il problema DCMST:
 - **Caratteristiche**: esce dagli ottimi locali ed esplora di più.
 - **Raffreddamento**: esponenziale (T = T × α).
 
-</details>
+
 
 ## ✨ Funzionalità
 
-<details>
+
 
 ### 🖥️ **GUI (semplificata)**
 - Interfaccia Tkinter essenziale con parametri base (sinistra) e Modalità Avanzata opzionale (destra) per SA/LS
@@ -149,11 +149,11 @@ pip3 install -r requirements.txt
 # Avvia l’applicazione
 python3 run.py
 ```
-</details>
+
 
 ## 🎮 Istruzioni d’uso
 
-<details>
+
 
 ### Flusso base
 1. **Avvio**: esegui DCST Tool (niente splash screen)
@@ -193,11 +193,11 @@ I risultati sono salvati su Desktop nella cartella `Plot/`:
 - **Grafici dello score**: andamento dello score nel tempo
 - **Log dettagliati**: statistiche d’esecuzione e violazioni del vincolo
 
-</details>
+
 
 ## 📊 Requisiti di sistema
 
-<details>
+
 
 ### Minimi richiesti
 - **RAM**: 4 GB (8 GB consigliati)
@@ -214,11 +214,11 @@ I risultati sono salvati su Desktop nella cartella `Plot/`:
 - **Grafi medi** (50–200 nodi): buone prestazioni con i default
 - **Grafi grandi** (200+ nodi): può servire tuning e hardware più potente
 
-</details>
+
 
 ## 🧪 Stack tecnologico
 
-<details>
+
 
 ### Tecnologie principali
 - **Python 3.10+**
@@ -233,11 +233,11 @@ I risultati sono salvati su Desktop nella cartella `Plot/`:
 ### Strumenti di build
 - (rimandati nel profilo semplificato)
 
-</details>
+
 
 ## 📚 Documentazione
 
-<details>
+
 
 ### Documentazione algoritmica
 Gli algoritmi seguono approcci standardizzati:
@@ -319,7 +319,7 @@ Nel codice del tool, la funzione `evaluate_solution` è un wrapper che prepara i
 > - Keeney, R.L., Raiffa, H. (1976). Decisions with Multiple Objectives: Preferences and Value Tradeoffs. Wiley.
 > - Fishburn, P.C. (1970). Utility Theory for Decision Making. Wiley.
 
-</details>
+
 
 ---
 

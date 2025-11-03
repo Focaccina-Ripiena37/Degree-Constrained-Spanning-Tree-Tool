@@ -1,10 +1,5 @@
 # 🌳 DCST Tool – Risolutore per l’Albero di Copertura con Vincolo di Grado (DCMST)
 
-> Nota (11/2025): questo repository adotta un profilo accademico semplificato, incentrato su chiarezza e didattica.
-> Include una GUI Tkinter minimale e tre algoritmi (Greedy, Local Search, Simulated Annealing).
-> Sistemi avanzati (tracciamento performance, parallelizzazione adattiva, packaging pesante, splash/temi) sono stati rimossi o deprecati.
-> I risultati (grafi, alberi, tabelle, grafici dello score) sono salvati come immagini nella cartella Desktop/Plot/.
-
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![Piattaforme](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/Focaccina-Ripiena37/Degree-Constrained-Spanning-Tree-Tool)
 [![Licenza](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)

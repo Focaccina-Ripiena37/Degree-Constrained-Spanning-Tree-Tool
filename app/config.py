@@ -4,8 +4,6 @@ app/config.py — Minimal configuration for the simplified academic DCST Tool.
 Only includes constants actually used by the lightweight GUI and utils.
 """
 
-# Workers for async image generation in utils (thread pool size)
-MAX_IMAGE_WORKERS = 3
 
 # Desktop directory fallback names for different locales
 DESKTOP_FALLBACK_NAMES = ['Desktop', 'Escritorio', 'Bureau', 'Scrivania']

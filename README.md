@@ -9,10 +9,6 @@
 [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/Focaccina-Ripiena37/Degree-Constrained-Spanning-Tree-Tool)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Build Status](https://img.shields.io/badge/Build-Passing-brightgreen.svg)](BUILD_INSTRUCTIONS.md)
-[![Last Commit](https://img.shields.io/github/last-commit/Focaccina-Ripiena37/Degree-Constrained-Spanning-Tree-Tool.svg)](../../commits/main)
-[![Open Issues](https://img.shields.io/github/issues/Focaccina-Ripiena37/Degree-Constrained-Spanning-Tree-Tool.svg)](../../issues)
-[![Pull Requests](https://img.shields.io/github/issues-pr/Focaccina-Ripiena37/Degree-Constrained-Spanning-Tree-Tool.svg)](../../pulls)
-[![Contributors](https://img.shields.io/github/contributors/Focaccina-Ripiena37/Degree-Constrained-Spanning-Tree-Tool.svg)](../../graphs/contributors)
 [![Code Style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://black.readthedocs.io/en/stable/)
 [![Tests](https://img.shields.io/badge/tests-6%20passing-brightgreen.svg)](../../actions)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](../../blob/main/CONTRIBUTING.md)
@@ -43,23 +39,24 @@ OUTPUT: Minimum cost spanning tree T with degree constraints satisfied
 
 The tool implements and compares three different algorithmic strategies for solving the DCMST problem:
 
-### 🔧 **Greedy (Kruskal MST + penalty)**
-- **Type**: Constructive algorithm
-- **Approach**: Kruskal MST ignoring degree limits during construction; degree violations are penalized in the cost function (no hard enforcement during build)
-- **Implementation**: Sort edges by weight, Union-Find for cycle detection; final cost = sum(weights) + penalty · excess_degree
-- **Characteristics**: Very fast, provides a strong baseline for subsequent improvement
-- **Time Complexity**: O(E log E)
+### 🔧 **Greedy (Rooted, Degree-Aware, soft constraint)**
+- **Type**: Constructive algorithm (Prim-like)
+- **Approach**: Starts from a root node and grows the tree by repeatedly adding the cheapest frontier edge that keeps degrees ≤ k on both endpoints. If no such edge exists but the graph isn’t yet spanned, it picks the best fallback edge by minimizing weight + λ·excess (soft constraint), guaranteeing connectivity.
+- **Root**: By default the GUI uses root R = 0 (first node).
+- **Implementation**: Two heaps (preferred vs fallback); preferred respects the degree bound, fallback uses an effective cost that includes the degree-excess penalty.
+- **Characteristics**: Very fast. It prefers degree-feasible edges, but may exceed k with an explicit penalty when needed to connect the graph.
+- **Time Complexity**: O(E log V)
 
-### 🔄 **Hill Climbing (First Improvement Local Search)**
+### 🔄 **Hill Climbing (Sampled First-Improvement Local Search)**
 - **Type**: Local search metaheuristic
-- **Approach**: Edge-swap operations with first improvement strategy
-- **Implementation**: Remove edge → find reconnecting edge → accept first improvement
-- **Characteristics**: Improves greedy solutions, reaches local optima
-- **Termination**: When no improving neighbor is found
+- **Approach**: At each iteration, sample up to m non-tree edges; for each candidate, try an edge-swap neighbor and accept the first strict improvement on the penalized objective cost + λ·excess (soft constraint).
+- **Tuning**: Sample size m is configurable in Advanced Mode (default m = 10)
+- **Characteristics**: Improves Greedy quickly; stops at a local optimum when no sampled neighbor improves
+- **Termination**: No improving neighbor found within the sampled set for an iteration
 
 ### 🔥 **Simulated Annealing**
 - **Type**: Probabilistic metaheuristic
-- **Approach**: Temperature-based acceptance with edge-swap operators
+- **Approach**: Temperature-based acceptance with edge-swap operators on the same penalized objective (cost + λ·excess).
 - **Implementation**: Accept improvements always, accept worse solutions with probability exp(-Δ/T)
 - **Characteristics**: Escapes local optima, explores solution space extensively
 - **Cooling Schedule**: Exponential temperature reduction (T = T × α)
@@ -160,8 +157,22 @@ python3 run.py
 6. **Export Data**: Results automatically saved to `~/Desktop/Plot/`
 
 ### Advanced Configuration
-- Advanced Mode: tune SA temperature, cooling rate, and iterations
+- Advanced Mode: tune SA temperature, cooling rate, iterations, and the Local Search sample size m
 - Stop functionality: interrupt long runs
+
+### Perché i risultati possono apparire “piatti” con i valori di default
+I valori di default sono pensati per una esecuzione rapida e robusta in aula o su laptop. Su grafi relativamente piccoli e con parametri moderati, la Greedy con vincolo soft tende già a produrre soluzioni vicine all’ottimo penalizzato, e le metaeuristiche (Local/SA) possono mostrare miglioramenti marginali. Questo può far sembrare che “tutti gli algoritmi vadano uguale”.
+
+Per evidenziare meglio le differenze tra algoritmi, prova a variare i parametri e “giocare” con questi fattori:
+
+- Dimensione del grafo: alza “Media/Grande” (es. 80–200 nodi) per ampliare lo spazio delle soluzioni.
+- Densità (prob. di connessione p): valori intermedi (0.2–0.5) generano più alternative plausibili; valori troppo bassi forzano collegamenti, troppo alti appiattiscono i margini di miglioramento.
+- Vincolo di grado k: rendilo più stringente (es. k=2 o 3). Un vincolo “tight” crea conflitti che la ricerca locale/SA può gestire meglio.
+- Penalità λ (Parametro “Penalità”): aumentando λ aumenti il costo delle violazioni; con λ più alto le differenze nelle strategie emergono più chiaramente.
+- Local Search: aumenta m (campione dell’intorno) e/o le iterazioni per cercare miglioramenti più profondi.
+- Simulated Annealing: usa temperature iniziali più alte, riduzioni più lente (α vicino a 0.99) e più iterazioni per esplorare di più (maggiore capacità di uscire dai minimi locali).
+
+Suggerimento pratico: parti da Small/Medium, k=2 o 3, p≈0.3–0.4, penalità 1000–5000, LS con m=20–40, SA con T0=200–400, α=0.97–0.99, iterazioni 2000–5000. Osserva l’evoluzione del costo/score e confronta i grafi salvati.
 
 ### Output Files
 Results are automatically saved to your Desktop in the `Plot/` directory:
@@ -211,9 +222,9 @@ Older build/distribution documents may refer to advanced features that are no lo
 
 ### Algorithm Documentation
 Each algorithm implementation follows standardized approaches:
-- **Greedy**: Modified Kruskal with Union-Find and degree constraints
-- **Hill Climbing**: First improvement with edge-swap neighborhood
-- **Simulated Annealing**: Exponential cooling with probabilistic acceptance
+- **Greedy**: Rooted, degree-aware Prim-like expansion with hard degree constraint (root R=0 by default)
+- **Hill Climbing**: Sampled first-improvement with edge-swap neighborhood (degree-feasible neighbors only)
+- **Simulated Annealing**: Exponential cooling with probabilistic acceptance; neighbors filtered to respect the degree bound
 
 ### Punteggio (MAUT, utilità esponenziale, log su tempo/memoria)
 
@@ -234,7 +245,8 @@ Formula (sintesi):
 Valori di riferimento (indipendenti dal confronto tra algoritmi):
 
 - cost_ref: costo atteso/baseline (nel tool: costo Greedy dell’istanza, se disponibile)
-- time_ref: 0.1 s (tempo “accettabile”)
+- time_ref: 0.1 s (tempo “accettabile” per le immagini/tabella generate dall’app);
+   la funzione generica `compute_score` ha un default più permissivo (5.0 s) per evitare sovrapenalizzazioni fuori dai grafici.
 - memory_ref: 100 MB (memoria “accettabile”)
 
 Pesi (importanza relativa): w_cost = 0.7, w_time = 0.2, w_mem = 0.1 (costo > tempo > memoria).
@@ -259,7 +271,7 @@ def compute_score(cost, violations, time_s, memory_mb, cost_ref, time_ref=0.1, m
    return 100.0 * exp(-L) if mapping == "exp" else 100.0 / (1.0 + L)
 ```
 
-Nel codice del tool, la funzione `evaluate_solution` è un wrapper che prepara i dati (notare che la memoria misurata internamente è in KB e viene convertita in MB per lo scoring) e invoca `compute_score` con i riferimenti sopra. Lo stesso schema è usato nei grafici “score evolution”, così tabella e grafico sono coerenti.
+Nel codice del tool, la funzione `evaluate_solution` è un wrapper che prepara i dati (notare che la memoria misurata internamente è in KB e viene convertita in MB per lo scoring) e invoca `compute_score` con i riferimenti sopra. Per le immagini/tabella l’app usa in genere time_ref=0.1 s e memory_ref=100 MB, mentre il default “generico” di `compute_score` è 5.0 s: i risultati visualizzati sono coerenti perché i riferimenti sono esplicitati nelle chiamate.
 
 #### 📦 Riquadro teoria e riferimenti (scoring)
 

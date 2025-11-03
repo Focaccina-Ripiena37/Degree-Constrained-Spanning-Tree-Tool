@@ -22,19 +22,22 @@ try:
         run_instance,
         calculate_cost_base,
         greedy_spanning_tree,
-        adaptive_neighborhood_local_search,
+        local_search,
         simulated_annealing_spanning_tree,
     )  # noqa: F401
+    # Backward-compat alias for legacy name
+    adaptive_neighborhood_local_search = local_search  # type: ignore
 except Exception:
     # Keep package importable even if heavy deps are missing
     run_instance = None  # type: ignore
     calculate_cost_base = None  # type: ignore
     greedy_spanning_tree = None  # type: ignore
+    local_search = None  # type: ignore
     adaptive_neighborhood_local_search = None  # type: ignore
     simulated_annealing_spanning_tree = None  # type: ignore
 
 try:
-    from .utils_core import (
+    from .utils import (
         generate_connected_random_graph,
         draw_and_save_graph,
         save_table_as_image,
@@ -52,6 +55,7 @@ __all__ = [
     'save_table_as_image',
     'calculate_cost_base',
     'greedy_spanning_tree',
+    'local_search',
     'adaptive_neighborhood_local_search',
     'simulated_annealing_spanning_tree',
 ]

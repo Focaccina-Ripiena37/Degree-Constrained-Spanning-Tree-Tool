@@ -15,6 +15,7 @@ import os
 import random
 import logging
 from typing import Dict, Any
+import shutil
 
 import matplotlib
 matplotlib.use('Agg')  # non-interactive backend for headless save
@@ -99,6 +100,23 @@ def get_current_plot_directory() -> str:
     if not _current_plot_dir or not os.path.isdir(_current_plot_dir):
         return reset_plot_directory()
     return _current_plot_dir
+
+
+def delete_current_plot_directory() -> bool:
+    """Delete the current plot directory (if any) and reset pointer.
+
+    Returns True if deletion was attempted successfully (directory removed or did not exist),
+    False if an unexpected error occurred.
+    """
+    global _current_plot_dir
+    try:
+        path = _current_plot_dir
+        _current_plot_dir = None
+        if path and os.path.isdir(path):
+            shutil.rmtree(path, ignore_errors=True)
+        return True
+    except Exception:
+        return False
 
 
 # -----------------------------
@@ -313,13 +331,13 @@ def plot_score_evolution(score_histories: Dict[str, Any], reference_final_values
                     scores.append(s)
         if iters and scores:
             any_series = True
+            col = colors.get(label, "#333333")
             if len(iters) == 1:
-                x0 = 0
-                x1 = x_max if x_max > iters[0] else max(iters[0], 1)
-                ax.plot([x0, x1], [scores[0], scores[0]], label=label, color=colors.get(label, "#333333"), linewidth=2.0, linestyle='--')
-                ax.plot(iters, scores, color=colors.get(label, "#333333"), marker='o', linestyle='None')
+                # Draw a labeled single point for single-iteration series (e.g., Greedy)
+                ax.plot(iters, scores, label=label, color=col, marker='o', linestyle='None', markersize=8, zorder=5)
             else:
-                ax.plot(iters, scores, label=label, color=colors.get(label, "#333333"), linewidth=2.0)
+                # Draw line with markers to make short series (e.g., Local) clearly visible
+                ax.plot(iters, scores, label=label, color=col, linewidth=2.0, marker='o', markersize=3)
     ax.set_xlabel("Iterazione", fontsize=11)
     ax.set_ylabel("Score (0-100, più alto è meglio)", fontsize=11)
     ax.grid(True, alpha=0.2)
@@ -327,6 +345,11 @@ def plot_score_evolution(score_histories: Dict[str, Any], reference_final_values
         ax.legend(loc="best", fontsize=10)
     fig.suptitle("Evoluzione dello Score per Algoritmo", fontsize=14, fontweight="bold")
     fig.tight_layout(rect=[0, 0.04, 1, 0.98])
+    # Ensure x-axis covers the full range including single-point series at x=1
+    try:
+        ax.set_xlim(0, max(1, int(x_max)))
+    except Exception:
+        pass
     full_path = filename if os.path.isabs(filename) else os.path.join(get_current_plot_directory(), filename)
     try:
         plt.savefig(full_path, bbox_inches="tight", dpi=300, facecolor='white')

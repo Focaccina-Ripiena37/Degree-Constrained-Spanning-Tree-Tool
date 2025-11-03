@@ -15,14 +15,15 @@ import logging
 import sys
 
 # Core functions used (kept simple and direct)
-from .algorithms import run_instance, evaluate_solution
-from .utils_core import (
+from .algorithms import run_instance, evaluate_solution, StopRequested
+from .utils import (
     generate_connected_random_graph,
     draw_and_save_graph,
     save_table_as_image,
     plot_score_evolution,
     get_current_plot_directory,
     reset_plot_directory,
+    delete_current_plot_directory,
 )
 try:
     import pandas as pd
@@ -35,7 +36,7 @@ class App:
     def __init__(self, root, progress_bar=None):
         self.root = root
         self.root.title("DCST Tool")
-        self.root.geometry("600x640")
+        self.root.geometry("600x750")
         # No application icon: keep the app minimal and academic-focused
 
         # State
@@ -76,7 +77,7 @@ class App:
         right_col.pack(side="left", fill="x", expand=True)
 
         # Parameters frame in left column (normal parameters on the left)
-        params = tk.Frame(left_col)
+        params = tk.LabelFrame(left_col, text="Generali")
         params.pack(fill="x")
 
         # Simple grid for parameters
@@ -96,13 +97,23 @@ class App:
         adv_toggle = ttk.Checkbutton(right_col, text="Modalità Avanzata", variable=self.advanced_mode, command=self._toggle_advanced)
         adv_toggle.pack(anchor="w")
 
-        self.adv_frame = tk.LabelFrame(right_col, text="Modalità Avanzata")
-        # Let the Scale column expand
-        self.adv_frame.columnconfigure(1, weight=1)
-        # SA parameter variables with requested defaults (backed by sliders)
-        self.sa_temp = tk.DoubleVar(value=100.0)
-        self.sa_cooling = tk.DoubleVar(value=0.95)
-        self.sa_iters = tk.IntVar(value=1000)
+        # Advanced container with two labeled sections: Local Search and Simulated Annealing
+        self.adv_container = tk.Frame(right_col)
+
+        # Variables for advanced params
+        self.ls_m = tk.IntVar(value=10)           # Local Search sample size
+        self.ls_iters = tk.IntVar(value=500)      # Local Search iterations (max)
+        self.sa_temp = tk.DoubleVar(value=100.0)  # SA temperature
+        self.sa_cooling = tk.DoubleVar(value=0.95)  # SA cooling factor
+        self.sa_iters = tk.IntVar(value=1000)     # SA iterations
+
+        # Local Search frame
+        self.ls_frame = tk.LabelFrame(self.adv_container, text="Local Search")
+        self.ls_frame.columnconfigure(1, weight=1)
+
+        # Simulated Annealing frame
+        self.sa_frame = tk.LabelFrame(self.adv_container, text="Simulated Annealing")
+        self.sa_frame.columnconfigure(1, weight=1)
 
         # Helper: clamp and set with optional rounding, preserving int/double Var types
         def _clamp_set(var, newv, vmin, vmax, ndigits=None):
@@ -119,32 +130,52 @@ class App:
                 var.set(v)
 
         # Sliders (Scale) for Advanced parameters
+        # Local Search sample size m: 1..100 (int)
+        tk.Label(self.ls_frame, text="Campione dell'intorno (m)").grid(row=0, column=0, sticky="w", padx=6, pady=2)
+        tk.Scale(self.ls_frame, from_=1, to=100, orient="horizontal", resolution=1, variable=self.ls_m, length=220).grid(row=0, column=1, sticky="we", padx=6, pady=(2, 8))
+        m_btns = tk.Frame(self.ls_frame)
+        m_btns.grid(row=0, column=2, sticky="w", padx=(0, 6), pady=(2, 8))
+        ttk.Button(m_btns, text="-", width=2, command=lambda: _clamp_set(self.ls_m, self.ls_m.get()-1, 1, 100)).pack(side="left", padx=2)
+        ttk.Button(m_btns, text="+", width=2, command=lambda: _clamp_set(self.ls_m, self.ls_m.get()+1, 1, 100)).pack(side="left", padx=2)
+
+        # Local Search iterations: 100..1000 (int)
+        tk.Label(self.ls_frame, text="Iterazioni").grid(row=1, column=0, sticky="w", padx=6, pady=2)
+        tk.Scale(self.ls_frame, from_=100, to=1000, orient="horizontal", resolution=1, variable=self.ls_iters, length=220).grid(row=1, column=1, sticky="we", padx=6, pady=(2, 8))
+        ls_iter_btns = tk.Frame(self.ls_frame)
+        ls_iter_btns.grid(row=1, column=2, sticky="w", padx=(0, 6), pady=(2, 8))
+        ttk.Button(ls_iter_btns, text="-", width=2, command=lambda: _clamp_set(self.ls_iters, self.ls_iters.get()-1, 100, 1000)).pack(side="left", padx=2)
+        ttk.Button(ls_iter_btns, text="+", width=2, command=lambda: _clamp_set(self.ls_iters, self.ls_iters.get()+1, 100, 1000)).pack(side="left", padx=2)
+
         # Temperature: 1..1000 (int)
-        tk.Label(self.adv_frame, text="Temperatura").grid(row=0, column=0, sticky="w", padx=6, pady=(6, 2))
-        tk.Scale(self.adv_frame, from_=1, to=1000, orient="horizontal", resolution=1, variable=self.sa_temp, length=220).grid(row=0, column=1, sticky="we", padx=6, pady=(6, 2))
-        temp_btns = tk.Frame(self.adv_frame)
+        tk.Label(self.sa_frame, text="Temperatura").grid(row=0, column=0, sticky="w", padx=6, pady=(6, 2))
+        tk.Scale(self.sa_frame, from_=1, to=1000, orient="horizontal", resolution=1, variable=self.sa_temp, length=220).grid(row=0, column=1, sticky="we", padx=6, pady=(6, 2))
+        temp_btns = tk.Frame(self.sa_frame)
         temp_btns.grid(row=0, column=2, sticky="w", padx=(0, 6), pady=(6, 2))
         ttk.Button(temp_btns, text="-", width=2, command=lambda: _clamp_set(self.sa_temp, self.sa_temp.get()-1, 1, 1000)).pack(side="left", padx=2)
         ttk.Button(temp_btns, text="+", width=2, command=lambda: _clamp_set(self.sa_temp, self.sa_temp.get()+1, 1, 1000)).pack(side="left", padx=2)
 
         # Cooling rate: 0.80..0.999 (step 0.001)
-        tk.Label(self.adv_frame, text="Fattore di raffreddamento").grid(row=1, column=0, sticky="w", padx=6, pady=2)
-        tk.Scale(self.adv_frame, from_=0.80, to=0.999, orient="horizontal", resolution=0.001, variable=self.sa_cooling, length=220).grid(row=1, column=1, sticky="we", padx=6, pady=2)
-        cool_btns = tk.Frame(self.adv_frame)
+        tk.Label(self.sa_frame, text="Fattore di raffreddamento").grid(row=1, column=0, sticky="w", padx=6, pady=2)
+        tk.Scale(self.sa_frame, from_=0.80, to=0.999, orient="horizontal", resolution=0.001, variable=self.sa_cooling, length=220).grid(row=1, column=1, sticky="we", padx=6, pady=2)
+        cool_btns = tk.Frame(self.sa_frame)
         cool_btns.grid(row=1, column=2, sticky="w", padx=(0, 6), pady=2)
         ttk.Button(cool_btns, text="-", width=2, command=lambda: _clamp_set(self.sa_cooling, self.sa_cooling.get()-0.001, 0.80, 0.999, ndigits=3)).pack(side="left", padx=2)
         ttk.Button(cool_btns, text="+", width=2, command=lambda: _clamp_set(self.sa_cooling, self.sa_cooling.get()+0.001, 0.80, 0.999, ndigits=3)).pack(side="left", padx=2)
 
         # Iterations: 100..10000 (fine control to single unit)
-        tk.Label(self.adv_frame, text="Iterazioni").grid(row=2, column=0, sticky="w", padx=6, pady=2)
-        tk.Scale(self.adv_frame, from_=100, to=10000, orient="horizontal", resolution=1, variable=self.sa_iters, length=220).grid(row=2, column=1, sticky="we", padx=6, pady=(2, 8))
-        iter_btns = tk.Frame(self.adv_frame)
+        tk.Label(self.sa_frame, text="Iterazioni").grid(row=2, column=0, sticky="w", padx=6, pady=2)
+        tk.Scale(self.sa_frame, from_=100, to=10000, orient="horizontal", resolution=1, variable=self.sa_iters, length=220).grid(row=2, column=1, sticky="we", padx=6, pady=(2, 8))
+        iter_btns = tk.Frame(self.sa_frame)
         iter_btns.grid(row=2, column=2, sticky="w", padx=(0, 6), pady=(2, 8))
         ttk.Button(iter_btns, text="-", width=2, command=lambda: _clamp_set(self.sa_iters, self.sa_iters.get()-1, 100, 10000)).pack(side="left", padx=2)
         ttk.Button(iter_btns, text="+", width=2, command=lambda: _clamp_set(self.sa_iters, self.sa_iters.get()+1, 100, 10000)).pack(side="left", padx=2)
 
+        # Pack sub-frames inside the container
+        self.ls_frame.pack(fill="x", padx=8, pady=(4, 6))
+        self.sa_frame.pack(fill="x", padx=8, pady=(0, 4))
+
         # Hidden by default, shown when checkbox is selected
-        self.adv_frame.pack_forget()
+        self.adv_container.pack_forget()
 
         # Controls frame
         controls = tk.Frame(self.root)
@@ -281,7 +312,19 @@ class App:
         if self.worker_thread and self.worker_thread.is_alive():
             self.stop_event.set()
             self.append_log("Stop requested...")
-        # Buttons are reset when the thread ends
+        # Immediate UI reset and cleanup
+        try:
+            self.stop_btn.config(state="disabled")
+            self.start_btn.config(state="normal")
+            self.set_progress(0, "Pronto", maximum=1)
+            self.open_plot_btn.configure(state="disabled")
+        except Exception:
+            pass
+        try:
+            delete_current_plot_directory()
+        except Exception:
+            pass
+        # Let the background thread wind down on its own after noticing stop_event
 
     def _run_all(self, instances):
         k = self.max_children.get()
@@ -320,19 +363,39 @@ class App:
                 # Run core algorithm suite (returns a dict of results)
                 try:
                     # Pass advanced SA parameters only if enabled
+                    ls_m_val = int(self.ls_m.get()) if use_adv else 10
+                    ls_iter_val = int(self.ls_iters.get()) if use_adv else 500
                     res = run_instance(
                         G=G,
                         max_children=k,
                         penalty=pen,
                         instance_name=name,
                         stop_event=self.stop_event,
-                        queue=None,
-                        progress_info=None,
-                        **sa_kwargs
+                        root=0,
+                        ls_sample_m=ls_m_val,
+                        ls_max_iterations=ls_iter_val,
+                        **sa_kwargs,
                     )
+                except StopRequested:
+                    # User-initiated stop: no popups, break fast
+                    res = None
+                    self._ui(lambda: self.append_log(f"[{name}] Interrotto dall'utente"))
+                    break
                 except Exception as e:
                     res = None
+                    # Log and show a popup explaining the error; Greedy should always find a solution
                     self._ui(lambda: self.append_log(f"[{name}] Error during computation: {e}"))
+                    try:
+                        messagebox.showerror(
+                            "Errore durante il calcolo",
+                            f"Si è verificato un errore in '{name}'.\n"
+                            f"Dettagli: {e}\n\n"
+                            "La Greedy con vincolo soft dovrebbe sempre trovare uno spanning tree. "
+                            "Verifica i parametri e riprova.",
+                        )
+                    except Exception:
+                        pass
+                    # Popup already shown above; avoid duplicate dialogs
 
                 self.results[name] = res
 
@@ -467,6 +530,10 @@ class App:
         self.stop_btn.config(state="disabled")
         self.start_btn.config(state="normal")
         self.set_progress(0, "Pronto", maximum=1)
+        try:
+            self.open_plot_btn.configure(state="disabled")
+        except Exception:
+            pass
 
     def _ui(self, fn):
         # Thread-safe UI updates
@@ -487,16 +554,17 @@ class App:
     def _toggle_advanced(self):
         try:
             if self.advanced_mode.get():
-                self.adv_frame.pack(fill="x", padx=12, pady=(0, 8))
+                # Show the advanced container and ensure its children are packed
+                self.adv_container.pack(fill="x", padx=12, pady=(0, 8))
             else:
-                self.adv_frame.pack_forget()
+                self.adv_container.pack_forget()
         except Exception:
             pass
 
 def lazy_load_algorithms():
     """Lazy load only the minimal set of functions actually used by the GUI."""
     from .algorithms import test_instance, evaluate_solution
-    from .utils_core import (
+    from .utils import (
         generate_connected_random_graph,
         draw_and_save_graph,
         save_table_as_image,

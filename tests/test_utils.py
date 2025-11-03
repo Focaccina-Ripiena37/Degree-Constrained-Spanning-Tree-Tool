@@ -1,6 +1,6 @@
 import networkx as nx
 
-from app.utils_core import generate_connected_random_graph
+from app.utils import generate_connected_random_graph
 from app.algorithms import count_constraint_violations
 
 

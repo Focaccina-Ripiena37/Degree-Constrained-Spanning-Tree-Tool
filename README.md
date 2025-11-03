@@ -1,4 +1,16 @@
-# 🌳 DCST Tool – Risolutore per l’Albero di Copertura con Vincolo di Grado (DCMST)
+<p align="center">
+  <img src="https://img.shields.io/badge/Degree-Constrained%20Spanning%20Tree%20Tool-1.0-blue?style=for-the-badge&logo=python&logoColor=white" alt="Project Banner">
+</p>
+
+<h1 align="center">🌿 Degree-Constrained Spanning Tree Tool</h1>
+<h3 align="center">Interactive GUI for Visualizing Greedy, Local Search & Simulated Annealing Algorithms</h3>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-3.10+-blue?style=flat-square">
+  <img src="https://img.shields.io/badge/NetworkX-3.4.2-lightgrey?style=flat-square">
+  <img src="https://img.shields.io/badge/Tkinter-GUI-green?style=flat-square">
+  <img src="https://img.shields.io/badge/License-MIT-yellow?style=flat-square">
+</p>
 
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![Piattaforme](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/Focaccina-Ripiena37/Degree-Constrained-Spanning-Tree-Tool)
@@ -34,6 +46,8 @@ OUTPUT: Albero di copertura T a costo minimo che rispetta il vincolo di grado (s
 
 ## 🎯 Approcci algoritmici
 
+<details>
+
 Il tool implementa e confronta tre strategie per il problema DCMST:
 
 ### 🔧 **Greedy (radicata, consapevole del grado, vincolo soft)**
@@ -58,7 +72,11 @@ Il tool implementa e confronta tre strategie per il problema DCMST:
 - **Caratteristiche**: esce dagli ottimi locali ed esplora di più.
 - **Raffreddamento**: esponenziale (T = T × α).
 
+</details>
+
 ## ✨ Funzionalità
+
+<details>
 
 ### 🖥️ **GUI (semplificata)**
 - Interfaccia Tkinter essenziale con parametri base (sinistra) e Modalità Avanzata opzionale (destra) per SA/LS
@@ -138,8 +156,11 @@ pip3 install -r requirements.txt
 # Avvia l’applicazione
 python3 run.py
 ```
+</details>
 
 ## 🎮 Istruzioni d’uso
+
+<details>
 
 ### Flusso base
 1. **Avvio**: esegui DCST Tool (niente splash screen)
@@ -179,10 +200,11 @@ I risultati sono salvati su Desktop nella cartella `Plot/`:
 - **Grafici dello score**: andamento dello score nel tempo
 - **Log dettagliati**: statistiche d’esecuzione e violazioni del vincolo
 
-## 🔧 Packaging in eseguibili
-Non previsto nel profilo semplificato attuale (possibile elemento di roadmap).
+</details>
 
 ## 📊 Requisiti di sistema
+
+<details>
 
 ### Minimi richiesti
 - **RAM**: 4 GB (8 GB consigliati)
@@ -199,7 +221,11 @@ Non previsto nel profilo semplificato attuale (possibile elemento di roadmap).
 - **Grafi medi** (50–200 nodi): buone prestazioni con i default
 - **Grafi grandi** (200+ nodi): può servire tuning e hardware più potente
 
+</details>
+
 ## 🧪 Stack tecnologico
+
+<details>
 
 ### Tecnologie principali
 - **Python 3.10+**
@@ -214,8 +240,12 @@ Non previsto nel profilo semplificato attuale (possibile elemento di roadmap).
 ### Strumenti di build
 - (rimandati nel profilo semplificato)
 
+</details>
+
 ## 📚 Documentazione
 Alcuni documenti storici possono citare funzionalità avanzate non più presenti.
+
+<details>
 
 ### Documentazione algoritmica
 Gli algoritmi seguono approcci standardizzati:
@@ -296,6 +326,8 @@ Nel codice del tool, la funzione `evaluate_solution` è un wrapper che prepara i
 >
 > - Keeney, R.L., Raiffa, H. (1976). Decisions with Multiple Objectives: Preferences and Value Tradeoffs. Wiley.
 > - Fishburn, P.C. (1970). Utility Theory for Decision Making. Wiley.
+
+</details>
 
 ---
 

@@ -15,10 +15,10 @@
 
 **DCST Tool** è una piccola applicazione grafica, adatta a studenti, sviluppata in Python per il problema del **Degree-Constrained Minimum Spanning Tree (DCMST)**. Nel profilo semplificato l’attenzione è su chiarezza, coerenza e visualizzazione dei risultati.
 
-## Dependencies (minimal)
+##🐍 Dependencies
 
 - Required: `networkx`, `matplotlib`
-- Optional: `pandas` (only for saving the combined summary table image; the app runs fine without it)
+- Optional: `pandas` (Recommended, only for saving the combined summary table image; the app runs fine without it)
 
 Install with:
 

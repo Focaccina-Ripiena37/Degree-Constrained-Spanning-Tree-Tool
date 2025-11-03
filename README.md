@@ -35,6 +35,8 @@ INPUT:  Grafo pesato G = (V, E), nodo radice r, vincolo di grado k
 OUTPUT: Albero di copertura T a costo minimo che rispetta il vincolo di grado (soft con penalità)
 ```
 
+<img width="601" height="789" alt="Screenshot 2025-11-03 164249" src="https://github.com/user-attachments/assets/44a56a68-af2a-4813-955f-dc065bb47bfa" />
+
 ## 🎯 Approcci algoritmici
 
 Il tool implementa e confronta tre strategie per il problema DCMST:

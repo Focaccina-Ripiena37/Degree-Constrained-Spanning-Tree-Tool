@@ -43,7 +43,7 @@ OUTPUT: Albero di copertura T a costo minimo che rispetta il vincolo di grado (s
 
 Il tool implementa e confronta tre strategie per il problema DCMST:
 
-### 🔧 **Greedy (radicata, consapevole del grado, vincolo soft)**
+### **Greedy (radicata, consapevole del grado, vincolo soft)**
 - **Tipo**: Costruttiva (stile Prim)
 - **Idea**: Cresce dall’origine aggiungendo l’arco di frontiera più economico che tenga i gradi ≤ k su entrambi i capi. Se non esistono tali archi ma il grafo non è ancora connesso, usa un fallback che minimizza peso + λ·eccesso (vincolo soft), garantendo la connettività.
 - **Radice**: di default R = 0.
@@ -51,14 +51,14 @@ Il tool implementa e confronta tre strategie per il problema DCMST:
 - **Caratteristiche**: molto veloce; preferisce soluzioni ammissibili ma può superare k con penalità per completare l’albero.
 - **Complessità**: O(E log V)
 
-### 🔄 **Hill Climbing (ricerca locale a primo miglioramento campionato)**
+### **Hill Climbing (ricerca locale a primo miglioramento campionato)**
 - **Tipo**: Metaeuristica di ricerca locale
 - **Idea**: a ogni iterazione campiona fino a m archi non in albero; per ciascuno prova una mossa di edge-swap e accetta il primo miglioramento sull’obiettivo (costo + λ·eccesso).
 - **Tuning**: m impostabile in Modalità Avanzata (default m = 10)
 - **Caratteristiche**: migliora rapidamente Greedy; si ferma in un ottimo locale quando non trova miglioramenti nel campione.
 - **Terminazione**: nessun vicino migliore nel campione dell’iterazione.
 
-### 🔥 **Simulated Annealing**
+### **Simulated Annealing**
 - **Tipo**: Metaeuristica probabilistica
 - **Idea**: edge-swap sull’obiettivo penalizzato (costo + λ·eccesso), con accettazione probabilistica in base alla temperatura.
 - **Implementazione**: accetta sempre i miglioramenti, accetta peggioramenti con probabilità exp(−Δ/T).
@@ -71,25 +71,25 @@ Il tool implementa e confronta tre strategie per il problema DCMST:
 
 
 
-### 🖥️ **GUI (semplificata)**
+### **GUI (semplificata)**
 - Interfaccia Tkinter essenziale con parametri base (sinistra) e Modalità Avanzata opzionale (destra) per SA/LS
 - Barra di progresso deterministica e piccolo riquadro log
 - Output salvati in Desktop/Plot/ (creata automaticamente); bottone “Apri Cartella Plot” per aprire la cartella
 
-### 📊 **Analisi e visualizzazione**
+### **Analisi e visualizzazione**
 - Visualizzazione del grafo e degli alberi (NetworkX + Matplotlib)
 - Immagine tabellare di confronto e grafico dell’evoluzione dello score
 - Metriche base: costo, tempo di esecuzione, violazioni del vincolo di grado
 
-### 🚀 Packaging
+### Packaging
 - Il packaging in eseguibili non rientra nell’attuale profilo semplificato.
 
 ## 📦 Installazione e uso
 
-### 🎯 **Per utenti finali**
+### **Per utenti finali**
 Il packaging binario non è previsto nel profilo semplificato. Usa la procedura per sviluppatori qui sotto. Su Windows puoi anche eseguire `install_dependencies.cmd` per creare il virtualenv e installare i requisiti (aggiungi `--with-pandas` per abilitare l’immagine tabellare opzionale).
 
-### 🛠️ **Per sviluppatori**
+### **Per sviluppatori**
 
 #### Prerequisiti
 - Python 3.10 o superiore

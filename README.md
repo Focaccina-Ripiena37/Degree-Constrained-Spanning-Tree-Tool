@@ -10,15 +10,8 @@
   <img src="https://img.shields.io/badge/NetworkX-3.4.2-lightgrey?style=flat-square">
   <img src="https://img.shields.io/badge/Tkinter-GUI-green?style=flat-square">
   <img src="https://img.shields.io/badge/License-MIT-yellow?style=flat-square">
+  <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg">
 </p>
-
-[![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
-[![Piattaforme](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/Focaccina-Ripiena37/Degree-Constrained-Spanning-Tree-Tool)
-[![Licenza](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Build](https://img.shields.io/badge/Build-Passing-brightgreen.svg)](BUILD_INSTRUCTIONS.md)
-[![Stile: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://black.readthedocs.io/en/stable/)
-[![Test](https://img.shields.io/badge/tests-6%20passing-brightgreen.svg)](../../actions)
-[![PR benvenute](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](../../blob/main/CONTRIBUTING.md)
 
 **DCST Tool** è una piccola applicazione grafica, adatta a studenti, sviluppata in Python per il problema del **Degree-Constrained Minimum Spanning Tree (DCMST)**. Nel profilo semplificato l’attenzione è su chiarezza, coerenza e visualizzazione dei risultati.
 

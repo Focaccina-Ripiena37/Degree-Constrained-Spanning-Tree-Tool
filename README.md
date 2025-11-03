@@ -300,53 +300,8 @@ Nel codice del tool, la funzione `evaluate_solution` è un wrapper che prepara i
 > - Keeney, R.L., Raiffa, H. (1976). Decisions with Multiple Objectives: Preferences and Value Tradeoffs. Wiley.
 > - Fishburn, P.C. (1970). Utility Theory for Decision Making. Wiley.
 
-## 🤝 Contributi
-
-Contributi benvenuti! Ecco come puoi aiutare:
-
-### Setup di sviluppo
-1. Fai il fork del repository
-2. Crea un branch: `git checkout -b feature-name`
-3. Implementa e testa accuratamente
-4. Commit con messaggi chiari: `git commit -m "Add feature description"`
-5. Push sul tuo fork: `git push origin feature-name`
-6. Apri una Pull Request
-
-### Linee guida
-- Segui PEP 8
-- Aggiungi test per le nuove funzionalità
-- Aggiorna la documentazione quando serve
-- Assicura compatibilità multipiattaforma
-- Prova su più sistemi operativi quando possibile
-
-### Ambiti possibili
-- Ottimizzazioni e nuovi algoritmi
-- Migliorie alla GUI e all’usabilità
-- Ottimizzazioni per grafi grandi
-- Altri formati di export e visualizzazioni
-- Migliorie alla documentazione e traduzioni
+---
 
 ## 📄 Licenza
 
 Progetto rilasciato con licenza MIT — vedi il file [LICENSE](LICENSE).
-
-## 🙏 Riconoscimenti
-
-- Sviluppato per il corso di Ricerca Operativa (A.A. 2024/2025)
-- Profilo semplificato aggiornato a 11/2025
-
-## 📬 Supporto e contatti
-
-- **Issues**: segnala bug o proponi feature via [GitHub Issues](../../issues)
-- **Discussions**: partecipa in [GitHub Discussions](../../discussions)
-- **Documentazione**: guide nel repository
-
----
-
-🚀 **Pronto a risolvere DCMST?** Scarica l’ultima release o clona il repository e inizia subito!
-
-## 🗺️ Roadmap (leggera)
-
-- Migliorare DPI e layout delle figure salvate
-- Tema scuro opzionale per la GUI Tkinter
-- Packaging (PyInstaller) per Windows/macOS/Linux con piccolo launcher

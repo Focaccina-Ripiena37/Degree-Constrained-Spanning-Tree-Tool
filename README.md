@@ -1,19 +1,19 @@
-# 🌳 DCST Tool – Degree-Constrained Spanning Tree Solver
+# 🌳 DCST Tool – Risolutore per l’Albero di Copertura con Vincolo di Grado (DCMST)
 
-> Note (2025-11): This repository now targets a simplified academic profile focused on clarity and teaching.
-> It includes a minimal Tkinter GUI and three algorithms (Greedy, Local Search, Simulated Annealing).
-> Advanced systems (performance tracking, adaptive parallelization, heavy packaging, splash/theme polish) were removed or deprecated.
-> Results (graphs, trees, tables, score plots) are saved as images under your Desktop/Plot/ directory.
+> Nota (11/2025): questo repository adotta un profilo accademico semplificato, incentrato su chiarezza e didattica.
+> Include una GUI Tkinter minimale e tre algoritmi (Greedy, Local Search, Simulated Annealing).
+> Sistemi avanzati (tracciamento performance, parallelizzazione adattiva, packaging pesante, splash/temi) sono stati rimossi o deprecati.
+> I risultati (grafi, alberi, tabelle, grafici dello score) sono salvati come immagini nella cartella Desktop/Plot/.
 
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
-[![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/Focaccina-Ripiena37/Degree-Constrained-Spanning-Tree-Tool)
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Build Status](https://img.shields.io/badge/Build-Passing-brightgreen.svg)](BUILD_INSTRUCTIONS.md)
-[![Code Style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://black.readthedocs.io/en/stable/)
-[![Tests](https://img.shields.io/badge/tests-6%20passing-brightgreen.svg)](../../actions)
-[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](../../blob/main/CONTRIBUTING.md)
+[![Piattaforme](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/Focaccina-Ripiena37/Degree-Constrained-Spanning-Tree-Tool)
+[![Licenza](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Build](https://img.shields.io/badge/Build-Passing-brightgreen.svg)](BUILD_INSTRUCTIONS.md)
+[![Stile: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://black.readthedocs.io/en/stable/)
+[![Test](https://img.shields.io/badge/tests-6%20passing-brightgreen.svg)](../../actions)
+[![PR benvenute](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](../../blob/main/CONTRIBUTING.md)
 
-**DCST Tool** is a compact, student-friendly graphical application developed in Python for the **Degree-Constrained Minimum Spanning Tree (DCMST)** problem. In this simplified academic profile the focus is on clarity, consistency, and results visualization.
+**DCST Tool** è una piccola applicazione grafica, adatta a studenti, sviluppata in Python per il problema del **Degree-Constrained Minimum Spanning Tree (DCMST)**. Nel profilo semplificato l’attenzione è su chiarezza, coerenza e visualizzazione dei risultati.
 
 ## Dependencies (minimal)
 
@@ -26,106 +26,106 @@ Install with:
 pip install -r requirements.txt
 ```
 
-## 📋 Problem Statement
+## 📋 Problema
 
-Given a weighted, non-complete graph and a root node r, find the minimum cost spanning tree rooted at r such that each node has at most k children (degree constraint).
+Dato un grafo pesato e non necessariamente completo e un nodo radice r, trovare un albero di copertura minimo radicato in r tale che ogni nodo abbia al più k figli (vincolo di grado).
 
 ```
-INPUT:  Weighted graph G = (V, E), root node r, degree constraint k
-OUTPUT: Minimum cost spanning tree T with degree constraints satisfied
+INPUT:  Grafo pesato G = (V, E), nodo radice r, vincolo di grado k
+OUTPUT: Albero di copertura T a costo minimo che rispetta il vincolo di grado (soft con penalità)
 ```
 
-## 🎯 Algorithmic Approaches
+## 🎯 Approcci algoritmici
 
-The tool implements and compares three different algorithmic strategies for solving the DCMST problem:
+Il tool implementa e confronta tre strategie per il problema DCMST:
 
-### 🔧 **Greedy (Rooted, Degree-Aware, soft constraint)**
-- **Type**: Constructive algorithm (Prim-like)
-- **Approach**: Starts from a root node and grows the tree by repeatedly adding the cheapest frontier edge that keeps degrees ≤ k on both endpoints. If no such edge exists but the graph isn’t yet spanned, it picks the best fallback edge by minimizing weight + λ·excess (soft constraint), guaranteeing connectivity.
-- **Root**: By default the GUI uses root R = 0 (first node).
-- **Implementation**: Two heaps (preferred vs fallback); preferred respects the degree bound, fallback uses an effective cost that includes the degree-excess penalty.
-- **Characteristics**: Very fast. It prefers degree-feasible edges, but may exceed k with an explicit penalty when needed to connect the graph.
-- **Time Complexity**: O(E log V)
+### 🔧 **Greedy (radicata, consapevole del grado, vincolo soft)**
+- **Tipo**: Costruttiva (stile Prim)
+- **Idea**: Cresce dall’origine aggiungendo l’arco di frontiera più economico che tenga i gradi ≤ k su entrambi i capi. Se non esistono tali archi ma il grafo non è ancora connesso, usa un fallback che minimizza peso + λ·eccesso (vincolo soft), garantendo la connettività.
+- **Radice**: di default R = 0.
+- **Implementazione**: due heap (preferiti vs fallback); i preferiti rispettano k, il fallback usa un costo “effettivo” con penalità per l’eccesso di grado.
+- **Caratteristiche**: molto veloce; preferisce soluzioni ammissibili ma può superare k con penalità per completare l’albero.
+- **Complessità**: O(E log V)
 
-### 🔄 **Hill Climbing (Sampled First-Improvement Local Search)**
-- **Type**: Local search metaheuristic
-- **Approach**: At each iteration, sample up to m non-tree edges; for each candidate, try an edge-swap neighbor and accept the first strict improvement on the penalized objective cost + λ·excess (soft constraint).
-- **Tuning**: Sample size m is configurable in Advanced Mode (default m = 10)
-- **Characteristics**: Improves Greedy quickly; stops at a local optimum when no sampled neighbor improves
-- **Termination**: No improving neighbor found within the sampled set for an iteration
+### 🔄 **Hill Climbing (ricerca locale a primo miglioramento campionato)**
+- **Tipo**: Metaeuristica di ricerca locale
+- **Idea**: a ogni iterazione campiona fino a m archi non in albero; per ciascuno prova una mossa di edge-swap e accetta il primo miglioramento sull’obiettivo (costo + λ·eccesso).
+- **Tuning**: m impostabile in Modalità Avanzata (default m = 10)
+- **Caratteristiche**: migliora rapidamente Greedy; si ferma in un ottimo locale quando non trova miglioramenti nel campione.
+- **Terminazione**: nessun vicino migliore nel campione dell’iterazione.
 
 ### 🔥 **Simulated Annealing**
-- **Type**: Probabilistic metaheuristic
-- **Approach**: Temperature-based acceptance with edge-swap operators on the same penalized objective (cost + λ·excess).
-- **Implementation**: Accept improvements always, accept worse solutions with probability exp(-Δ/T)
-- **Characteristics**: Escapes local optima, explores solution space extensively
-- **Cooling Schedule**: Exponential temperature reduction (T = T × α)
+- **Tipo**: Metaeuristica probabilistica
+- **Idea**: edge-swap sull’obiettivo penalizzato (costo + λ·eccesso), con accettazione probabilistica in base alla temperatura.
+- **Implementazione**: accetta sempre i miglioramenti, accetta peggioramenti con probabilità exp(−Δ/T).
+- **Caratteristiche**: esce dagli ottimi locali ed esplora di più.
+- **Raffreddamento**: esponenziale (T = T × α).
 
-## ✨ Features
+## ✨ Funzionalità
 
-### 🖥️ **GUI (Simplified)**
-- Basic Tkinter interface with normal parameters (left) and an optional Advanced Mode (right) for SA parameters
-- Determinate progress bar and a small log panel
-- Outputs saved to Desktop/Plot/ (auto-created); a dedicated “Apri Cartella Plot” button opens the folder
+### 🖥️ **GUI (semplificata)**
+- Interfaccia Tkinter essenziale con parametri base (sinistra) e Modalità Avanzata opzionale (destra) per SA/LS
+- Barra di progresso deterministica e piccolo riquadro log
+- Output salvati in Desktop/Plot/ (creata automaticamente); bottone “Apri Cartella Plot” per aprire la cartella
 
-### 📊 **Analysis & Visualization**
-- Graph and spanning tree visualization (NetworkX + Matplotlib)
-- Comparison table image and raw score-evolution plot image
-- Basic metrics: cost, runtime, and degree-constraint violations
+### 📊 **Analisi e visualizzazione**
+- Visualizzazione del grafo e degli alberi (NetworkX + Matplotlib)
+- Immagine tabellare di confronto e grafico dell’evoluzione dello score
+- Metriche base: costo, tempo di esecuzione, violazioni del vincolo di grado
 
 ### 🚀 Packaging
-- Executable packaging is currently out-of-scope for the simplified profile.
+- Il packaging in eseguibili non rientra nell’attuale profilo semplificato.
 
-## 📦 Installation & Usage
+## 📦 Installazione e uso
 
-### 🎯 **For End Users**
-Binary packaging is currently out-of-scope for the simplified profile. Please use the developer setup below. On Windows, you can also run `install_dependencies.cmd` to create a virtual environment and install requirements automatically (add `--with-pandas` to enable the optional summary table image).
+### 🎯 **Per utenti finali**
+Il packaging binario non è previsto nel profilo semplificato. Usa la procedura per sviluppatori qui sotto. Su Windows puoi anche eseguire `install_dependencies.cmd` per creare il virtualenv e installare i requisiti (aggiungi `--with-pandas` per abilitare l’immagine tabellare opzionale).
 
-### 🛠️ **For Developers**
+### 🛠️ **Per sviluppatori**
 
-#### Prerequisites
-- Python 3.10 or later
-- pip package manager
-- Git (for cloning)
+#### Prerequisiti
+- Python 3.10 o superiore
+- Gestore pacchetti pip
+- Git (per il clone)
 
-#### Installation Steps
+#### Procedura di installazione
 ```
 # Clone
 git clone https://github.com/Focaccina-Ripiena37/Degree-Constrained-Spanning-Tree-Tool.git
 cd Degree-Constrained-Spanning-Tree-Tool
 
-# Create and activate a virtual environment (recommended)
+# Crea e attiva un virtual environment (consigliato)
 python -m venv .venv
 \.\.venv\Scripts\Activate.ps1  # Windows PowerShell
 
-# Install minimal dependencies
+# Installa le dipendenze minime
 pip install -r requirements.txt
 
-# (Optional) Install extras for table image rendering
+# (Opzionale) Installa extra per l’immagine tabellare
 # pip install pandas
 
-# Run tests (optional)
+# Esegui i test (opzionale)
 python -m pytest -q
 
-# Run the application
+# Avvia l’applicazione
 python run.py
 ```
 
-#### Platform-Specific Setup
+#### Setup per piattaforma
 
 **Windows:**
 ```cmd
-# Quick start (PowerShell)
+# Avvio rapido (PowerShell)
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 python -m venv .venv; .\.venv\Scripts\Activate.ps1; pip install -r requirements.txt; python run.py
 
-# In alternativa, script guidato (crea .venv e installa deps):
+# In alternativa, script guidato (crea .venv e installa dipendenze):
 ./install_dependencies.cmd
 ```
 
 **macOS:**
 ```bash
-# Create and activate venv, then install and run
+# Crea e attiva il venv, poi installa ed esegui
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip setuptools wheel
@@ -135,30 +135,30 @@ python run.py
 
 **Linux:**
 ```bash
-# Install dependencies
+# Installa le dipendenze
 pip3 install -r requirements.txt
 
-# Launch the application
+# Avvia l’applicazione
 python3 run.py
 ```
 
-## 🎮 Usage Instructions
+## 🎮 Istruzioni d’uso
 
-### Basic Workflow
-1. **Launch Application**: Start DCST Tool (no splash screen)
-2. **Configure Parameters**:
-   - Set graph sizes (Small: 10, Medium: 50, Large: 200 nodes)
-   - Adjust degree constraint (k = maximum children per node)
-   - Set penalty value for constraint violations
-   - Configure connection probability multiplier
-3. **Run Algorithms**: Click "Start" to execute all three algorithms
-4. **Monitor Progress**: Watch real-time progress updates and status messages
-5. **View Results**: Analyze generated graphs, spanning trees, and performance metrics
-6. **Export Data**: Results automatically saved to `~/Desktop/Plot/`
+### Flusso base
+1. **Avvio**: esegui DCST Tool (niente splash screen)
+2. **Configura i parametri**:
+   - dimensioni dei grafi (Small: 10, Medium: 50, Large: 200 nodi)
+   - vincolo di grado k (figli massimi per nodo)
+   - penalità per le violazioni del vincolo
+   - probabilità di connessione p
+3. **Esegui gli algoritmi**: premi “Start” per lanciare Greedy, Local e SA
+4. **Monitora**: segui la barra di avanzamento e i messaggi di log
+5. **Visualizza**: analizza i grafi, gli alberi e le metriche
+6. **Esporta**: i risultati sono salvati in `~/Desktop/Plot/`
 
-### Advanced Configuration
-- Advanced Mode: tune SA temperature, cooling rate, iterations, and the Local Search sample size m
-- Stop functionality: interrupt long runs
+### Configurazione avanzata
+- Modalità Avanzata: regola temperatura di SA, fattore di raffreddamento, iterazioni e campione m di Local Search
+- Stop: interrompe esecuzioni lunghe
 
 ### Perché i risultati possono apparire “piatti” con i valori di default
 I valori di default sono pensati per una esecuzione rapida e robusta in aula o su laptop. Su grafi relativamente piccoli e con parametri moderati, la Greedy con vincolo soft tende già a produrre soluzioni vicine all’ottimo penalizzato, e le metaeuristiche (Local/SA) possono mostrare miglioramenti marginali. Questo può far sembrare che “tutti gli algoritmi vadano uguale”.
@@ -174,57 +174,57 @@ Per evidenziare meglio le differenze tra algoritmi, prova a variare i parametri 
 
 Suggerimento pratico: parti da Small/Medium, k=2 o 3, p≈0.3–0.4, penalità 1000–5000, LS con m=20–40, SA con T0=200–400, α=0.97–0.99, iterazioni 2000–5000. Osserva l’evoluzione del costo/score e confronta i grafi salvati.
 
-### Output Files
-Results are automatically saved to your Desktop in the `Plot/` directory:
-- **Initial Graphs**: Visualization of generated test graphs
-- **Optimized Trees**: Spanning trees found by each algorithm
-- **Comparison Table**: Performance metrics and solution quality
-- **Score Charts**: Algorithm performance over time
-- **Detailed Logs**: Execution statistics and constraint violation reports
+### File di output
+I risultati sono salvati su Desktop nella cartella `Plot/`:
+- **Grafi iniziali**: visualizzazione dei grafi generati
+- **Alberi ottimizzati**: alberi trovati da ciascun algoritmo
+- **Tabella di confronto**: metriche e qualità della soluzione
+- **Grafici dello score**: andamento dello score nel tempo
+- **Log dettagliati**: statistiche d’esecuzione e violazioni del vincolo
 
-## 🔧 Building Executables
-Out of scope for the current simplified profile. A future roadmap item.
+## 🔧 Packaging in eseguibili
+Non previsto nel profilo semplificato attuale (possibile elemento di roadmap).
 
-## 📊 System Requirements
+## 📊 Requisiti di sistema
 
-### Minimum Requirements
-- **RAM**: 4 GB (8 GB recommended)
-- **Storage**: 500 MB free space
-- **CPU**: Any modern processor (multi-core recommended for large graphs)
+### Minimi richiesti
+- **RAM**: 4 GB (8 GB consigliati)
+- **Storage**: 500 MB liberi
+- **CPU**: qualunque processore moderno (multi-core consigliato per grafi grandi)
 
-### Platform Compatibility
+### Compatibilità piattaforme
 - **Windows**: Windows 10/11 (64-bit) ✅
-- **macOS**: macOS 10.14 (Mojave) or later ✅
-- **Linux**: Most modern distributions (64-bit) ✅
+- **macOS**: macOS 10.14+ ✅
+- **Linux**: principali distribuzioni moderne (64-bit) ✅
 
-### Performance Guidelines
-- **Small Graphs** (< 50 nodes): All algorithms perform well on any system
-- **Medium Graphs** (50-200 nodes): Good performance with default settings
-- **Large Graphs** (200+ nodes): May require parameter tuning and more powerful hardware
+### Linee guida prestazionali
+- **Grafi piccoli** (< 50 nodi): tutti gli algoritmi vanno bene su qualunque macchina
+- **Grafi medi** (50–200 nodi): buone prestazioni con i default
+- **Grafi grandi** (200+ nodi): può servire tuning e hardware più potente
 
-## 🧪 Technology Stack
+## 🧪 Stack tecnologico
 
-### Core Technologies
-- **Python 3.10+**: Main programming language
-- **Tkinter**: Cross-platform GUI framework
-- **NetworkX**: Graph algorithms and data structures
-- **Matplotlib**: Graph visualization and plotting
-- **(Optional) Pandas**: Combined summary table image export
+### Tecnologie principali
+- **Python 3.10+**
+- **Tkinter** (GUI multipiattaforma)
+- **NetworkX** (grafi e algoritmi)
+- **Matplotlib** (visualizzazione)
+- **(Opzionale) Pandas** (immagine tabellare combinata)
 
-### Additional Libraries
-- **PIL/Pillow**: Image processing (via Matplotlib)
+### Librerie aggiuntive
+- **PIL/Pillow**: elaborazione immagini (tramite Matplotlib)
 
-### Build Tools
-- (Deferred in simplified profile)
+### Strumenti di build
+- (rimandati nel profilo semplificato)
 
-## 📚 Documentation
-Older build/distribution documents may refer to advanced features that are no longer present.
+## 📚 Documentazione
+Alcuni documenti storici possono citare funzionalità avanzate non più presenti.
 
-### Algorithm Documentation
-Each algorithm implementation follows standardized approaches:
-- **Greedy**: Rooted, degree-aware Prim-like expansion with hard degree constraint (root R=0 by default)
-- **Hill Climbing**: Sampled first-improvement with edge-swap neighborhood (degree-feasible neighbors only)
-- **Simulated Annealing**: Exponential cooling with probabilistic acceptance; neighbors filtered to respect the degree bound
+### Documentazione algoritmica
+Gli algoritmi seguono approcci standardizzati:
+- **Greedy**: espansione stile Prim radicata e consapevole del grado con vincolo soft (R=0 di default)
+- **Hill Climbing**: primo miglioramento su vicinato di edge-swap (obiettivo penalizzato)
+- **Simulated Annealing**: raffreddamento esponenziale con accettazione probabilistica; mosse su edge-swap
 
 ### Punteggio (MAUT, utilità esponenziale, log su tempo/memoria)
 
@@ -300,53 +300,53 @@ Nel codice del tool, la funzione `evaluate_solution` è un wrapper che prepara i
 > - Keeney, R.L., Raiffa, H. (1976). Decisions with Multiple Objectives: Preferences and Value Tradeoffs. Wiley.
 > - Fishburn, P.C. (1970). Utility Theory for Decision Making. Wiley.
 
-## 🤝 Contributing
+## 🤝 Contributi
 
-We welcome contributions! Here's how you can help:
+Contributi benvenuti! Ecco come puoi aiutare:
 
-### Development Setup
-1. Fork the repository
-2. Create a feature branch: `git checkout -b feature-name`
-3. Make your changes and test thoroughly
-4. Commit with clear messages: `git commit -m "Add feature description"`
-5. Push to your fork: `git push origin feature-name`
-6. Create a Pull Request
+### Setup di sviluppo
+1. Fai il fork del repository
+2. Crea un branch: `git checkout -b feature-name`
+3. Implementa e testa accuratamente
+4. Commit con messaggi chiari: `git commit -m "Add feature description"`
+5. Push sul tuo fork: `git push origin feature-name`
+6. Apri una Pull Request
 
-### Contribution Guidelines
-- Follow PEP 8 style guidelines
-- Add tests for new functionality
-- Update documentation as needed
-- Ensure cross-platform compatibility
-- Test on multiple operating systems when possible
+### Linee guida
+- Segui PEP 8
+- Aggiungi test per le nuove funzionalità
+- Aggiorna la documentazione quando serve
+- Assicura compatibilità multipiattaforma
+- Prova su più sistemi operativi quando possibile
 
-### Areas for Contribution
-- Algorithm optimizations and new implementations
-- GUI enhancements and usability improvements
-- Performance optimizations for large graphs
-- Additional export formats and visualization options
-- Documentation improvements and translations
+### Ambiti possibili
+- Ottimizzazioni e nuovi algoritmi
+- Migliorie alla GUI e all’usabilità
+- Ottimizzazioni per grafi grandi
+- Altri formati di export e visualizzazioni
+- Migliorie alla documentazione e traduzioni
 
-## 📄 License
+## 📄 Licenza
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+Progetto rilasciato con licenza MIT — vedi il file [LICENSE](LICENSE).
 
-## 🙏 Acknowledgments
+## 🙏 Riconoscimenti
 
-- Developed for Operations Research coursework (A.A. 2024/2025)
-- Simplified in 2025-11 for a student-friendly academic profile
+- Sviluppato per il corso di Ricerca Operativa (A.A. 2024/2025)
+- Profilo semplificato aggiornato a 11/2025
 
-## 📬 Support & Contact
+## 📬 Supporto e contatti
 
-- **Issues**: Report bugs or request features via [GitHub Issues](../../issues)
-- **Discussions**: Join conversations in [GitHub Discussions](../../discussions)
-- **Documentation**: Comprehensive guides available in the repository
+- **Issues**: segnala bug o proponi feature via [GitHub Issues](../../issues)
+- **Discussions**: partecipa in [GitHub Discussions](../../discussions)
+- **Documentazione**: guide nel repository
 
 ---
 
-🚀 **Ready to solve degree-constrained spanning tree problems?** Download the latest release or clone the repository to get started!
+🚀 **Pronto a risolvere DCMST?** Scarica l’ultima release o clona il repository e inizia subito!
 
-## 🗺️ Roadmap (lightweight)
+## 🗺️ Roadmap (leggera)
 
-- Improve figure DPI and layout consistency in saved images
-- Optional dark theme for the Tkinter GUI
-- Packaging (PyInstaller) for Windows/macOS/Linux with a tiny launcher
+- Migliorare DPI e layout delle figure salvate
+- Tema scuro opzionale per la GUI Tkinter
+- Packaging (PyInstaller) per Windows/macOS/Linux con piccolo launcher

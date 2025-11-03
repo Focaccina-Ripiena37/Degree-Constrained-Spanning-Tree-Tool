@@ -395,7 +395,7 @@ class App:
                         )
                     except Exception:
                         pass
-                    # Popup already shown above; avoid duplicate dialogs
+                    # Mostra una sola finestra di errore per questa eccezione
 
                 self.results[name] = res
 
@@ -484,7 +484,7 @@ class App:
 
                             if rows and pd is not None:
                                 df = pd.DataFrame(rows)
-                                # Extend combined summary accumulator (per-instance image removed by request)
+                                # Accumula le righe per generare una singola tabella riepilogativa combinata
                                 combined_rows.extend(rows)
                         except Exception as e:
                             self._ui(lambda: self.append_log(f"[{name}] Warning: could not save summary images: {e}"))
